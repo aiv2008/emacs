@@ -35,6 +35,10 @@
 ;; 终端里启动的 Emacs 本身 PATH 已正确，不会走到这里。
 (use-package exec-path-from-shell
   :if (memq window-system '(mac ns))
+  :init
+  (setq exec-path-from-shell-variables
+        '("PATH" "MANPATH"
+          "ANTHROPIC_API_KEY" "OPENAI_API_KEY" "OPENROUTER_API_KEY"))
   :config
   (exec-path-from-shell-initialize))
 
@@ -215,6 +219,95 @@
   :bind ("C-x v" . vterm)
   :config
   (setq vterm-shell (or (getenv "SHELL") "/bin/bash")))
+
+;;; --------------------------------------------------------------------------
+;;; 11. Git（Magit）
+;;; --------------------------------------------------------------------------
+;; 状态里常用：s stage，c c 写说明并提交，P p 推送，F p 拉取，b b 切分支。
+(use-package magit
+  :bind (("C-x g" . magit-status)          ; 仓库状态
+         ("C-x M-g" . magit-dispatch)      ; Magit 命令菜单
+         ("C-c M-g" . magit-file-dispatch))) ; 当前文件：blame / log / diff
+
+;;; --------------------------------------------------------------------------
+;;; 12. AI
+;;; --------------------------------------------------------------------------
+;; 密钥不要写进本文件。任选其一：
+;;   环境变量 ANTHROPIC_API_KEY / OPENAI_API_KEY
+;;   ~/.authinfo ：machine api.anthropic.com login apikey password sk-ant-...
+;; Claude Code 用本机 CLI（~/.local/bin/claude），不从 GitHub 拉包
+;; （:vc 在这边会 Empty checkout，拖垮整个 init.el）。
+
+(defvar my/claude-buffer "*claude-code*")
+
+(defun my/claude-project-root ()
+  (or (when-let ((p (project-current nil)))
+        (project-root p))
+      default-directory))
+
+(defun my/claude-start ()
+  "在当前工程根目录启动 Claude Code。"
+  (interactive)
+  (let ((root (my/claude-project-root))
+        (buf my/claude-buffer))
+    (if (get-buffer buf)
+        (pop-to-buffer buf)
+      (let ((default-directory root))
+        (vterm buf)
+        (run-with-timer
+         0.4 nil
+         (lambda ()
+           (when (buffer-live-p (get-buffer buf))
+             (with-current-buffer buf
+               (vterm-send-string "claude")
+               (vterm-send-return)))))))))
+
+(defun my/claude-toggle ()
+  "显示或隐藏 Claude 窗口。"
+  (interactive)
+  (if-let ((win (get-buffer-window my/claude-buffer)))
+      (delete-window win)
+    (my/claude-start)))
+
+(defun my/claude-send-region ()
+  "把选区发给 Claude。"
+  (interactive)
+  (unless (use-region-p)
+    (user-error "请先选中区域"))
+  (let ((text (buffer-substring-no-properties (region-beginning) (region-end))))
+    (unless (get-buffer my/claude-buffer)
+      (my/claude-start)
+      (sit-for 1.2))
+    (with-current-buffer my/claude-buffer
+      (vterm-send-string text)
+      (vterm-send-return))
+    (pop-to-buffer my/claude-buffer)))
+
+(defvar-keymap my/claude-command-map
+  :doc "Claude Code 快捷键"
+  "c" #'my/claude-start
+  "t" #'my/claude-toggle
+  "r" #'my/claude-send-region)
+
+(keymap-set global-map "C-c c" my/claude-command-map)
+
+;; 对话 / 改写。C-c g 开聊天；选中文字后 C-c RET 发送；C-u C-c RET 选模型。
+(use-package gptel
+  :bind (("C-c g" . gptel)
+         ("C-c RET" . gptel-send))
+  :config
+  (setq gptel-default-mode 'org-mode
+        gptel-api-key (lambda ()
+                        (or (getenv "ANTHROPIC_API_KEY")
+                            (getenv "OPENAI_API_KEY")
+                            (getenv "OPENROUTER_API_KEY"))))
+  (when (or (getenv "ANTHROPIC_API_KEY")
+            (file-exists-p (expand-file-name "~/.authinfo"))
+            (file-exists-p (expand-file-name "~/.authinfo.gpg")))
+    (setq gptel-model 'claude-sonnet-4-6
+          gptel-backend (gptel-make-anthropic "Claude"
+                          :stream t
+                          :key gptel-api-key))))
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
