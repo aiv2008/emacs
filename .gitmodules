@@ -1,0 +1,3 @@
+[submodule "lean4-mode"]
+	path = lean4-mode
+	url = https://github.com/leanprover-community/lean4-mode.git

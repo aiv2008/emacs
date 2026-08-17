@@ -1,0 +1,32 @@
+# 包和原生编译缓存（use-package 会再装）
+elpa/
+eln-cache/
+
+# 会话 / 缓存
+auto-save-list/
+.cache/
+transient/
+url/
+eshell/
+
+# 备份
+*~
+\#*\#
+.\#*
+*.bak
+*.bak.*
+
+# 本机状态，不要进仓库
+history
+places
+recentf
+projects
+projectile-bookmarks.eld
+projectile-frecency.eld
+.lsp-session-v1
+.dap-breakpoints
+tramp
+network-security.data
+ido.last
+amx-items
+smex-items
