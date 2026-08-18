@@ -138,6 +138,33 @@
 ;;; --------------------------------------------------------------------------
 ;;; 5. 补全
 ;;; --------------------------------------------------------------------------
+;; which-key：延迟显示可用快捷键，帮助记忆。
+(use-package which-key
+  :init
+  (which-key-mode)
+  :config
+  (setq which-key-idle-delay 0.5
+        which-key-sort-order 'which-key-key-order-alpha))
+
+;; vertico：更好的 minibuffer 补全界面（替代默认的 *Completions*）。
+(use-package vertico
+  :init
+  (vertico-mode)
+  :config
+  (setq vertico-cycle t))
+
+;; orderless：模糊匹配补全样式，支持空格分隔的多个关键词。
+(use-package orderless
+  :custom
+  (completion-styles '(orderless basic))
+  (completion-category-overrides '((file (styles basic partial-completion)))))
+
+;; marginalia：在 minibuffer 补全候选旁边显示额外信息（文件大小、命令说明等）。
+(use-package marginalia
+  :init
+  (marginalia-mode))
+
+;; company：代码补全。
 (use-package company
   :init
   (global-company-mode t)
@@ -179,7 +206,26 @@
 (add-hook 'js-mode-hook #'my/bind-xref-keys)
 
 ;;; --------------------------------------------------------------------------
-;;; 8. LSP（eglot）
+;;; 8. Markdown
+;;; --------------------------------------------------------------------------
+(use-package markdown-mode
+  :mode (("\\.md\\'" . markdown-mode)
+         ("\\.markdown\\'" . markdown-mode))
+  :bind (:map markdown-mode-map
+              ("C-c C-c p" . markdown-preview-mode))
+  :config
+  (setq markdown-command "pandoc"))
+
+(use-package markdown-preview-mode
+  :after markdown-mode
+  :config
+  (setq markdown-preview-stylesheets
+        (list "https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.1.0/github-markdown.min.css")
+        markdown-preview-javascript
+        (list "https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.1.0/github-markdown.min.css")))
+
+;;; --------------------------------------------------------------------------
+;;; 9. LSP（eglot）
 ;;; --------------------------------------------------------------------------
 ;; 大仓库用 lakefile / package.json 当工程根，避免 eglot 跑到 git 根目录。
 (setq project-vc-extra-root-markers
@@ -270,6 +316,17 @@
   :bind (("C-x g" . magit-status)          ; 仓库状态
          ("C-x M-g" . magit-dispatch)      ; Magit 命令菜单
          ("C-c M-g" . magit-file-dispatch))) ; 当前文件：blame / log / diff
+
+;; git-gutter：在行号旁显示 git diff 状态（新增/修改/删除）。
+(use-package git-gutter
+  :config
+  (global-git-gutter-mode +1)
+  (setq git-gutter:update-interval 0.5)
+  :bind (("C-x v =" . git-gutter:popup-hunk)  ; 显示当前 hunk 的 diff
+         ("C-x v p" . git-gutter:previous-hunk)
+         ("C-x v n" . git-gutter:next-hunk)
+         ("C-x v r" . git-gutter:revert-hunk)  ; 撤销当前 hunk
+         ("C-x v s" . git-gutter:stage-hunk))) ; stage 当前 hunk
 
 ;;; --------------------------------------------------------------------------
 ;;; 12. AI（CodeRelay 中转：https://coderelay.cn）
