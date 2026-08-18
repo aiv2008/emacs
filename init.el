@@ -38,7 +38,9 @@
   :init
   (setq exec-path-from-shell-variables
         '("PATH" "MANPATH"
-          "ANTHROPIC_API_KEY" "OPENAI_API_KEY" "OPENROUTER_API_KEY"))
+          "CODERELAY_API_KEY"
+          "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL"
+          "OPENAI_API_KEY" "OPENROUTER_API_KEY"))
   :config
   (exec-path-from-shell-initialize))
 
@@ -270,13 +272,25 @@
          ("C-c M-g" . magit-file-dispatch))) ; 当前文件：blame / log / diff
 
 ;;; --------------------------------------------------------------------------
-;;; 12. AI
+;;; 12. AI（CodeRelay 中转：https://coderelay.cn）
 ;;; --------------------------------------------------------------------------
-;; 密钥不要写进本文件。任选其一：
-;;   环境变量 ANTHROPIC_API_KEY / OPENAI_API_KEY
-;;   ~/.authinfo ：machine api.anthropic.com login apikey password sk-ant-...
-;; Claude Code 用本机 CLI（~/.local/bin/claude），不从 GitHub 拉包
-;; （:vc 在这边会 Empty checkout，拖垮整个 init.el）。
+;; 密钥不要写进本文件。复制控制台的 key 后任选其一：
+;;   export CODERELAY_API_KEY="sk-..."     # 推荐，写进 ~/.zshrc
+;;   或把 key 单独一行放到 ~/.config/coderelay/api-key
+;; Claude Code 用本机 CLI；gptel 走 OpenAI 兼容接口 /v1/chat/completions。
+
+(defvar my/coderelay-host "coderelay.cn")
+(defvar my/coderelay-base-url "https://coderelay.cn")
+
+(defun my/coderelay-api-key ()
+  "读取 CodeRelay 密钥，不把密钥写进 init.el。"
+  (or (getenv "CODERELAY_API_KEY")
+      (let ((file (expand-file-name "~/.config/coderelay/api-key")))
+        (when (file-readable-p file)
+          (string-trim
+           (with-temp-buffer
+             (insert-file-contents file)
+             (buffer-string)))))))
 
 (defvar my/claude-buffer "*claude-code*")
 
@@ -286,13 +300,22 @@
       default-directory))
 
 (defun my/claude-start ()
-  "在当前工程根目录启动 Claude Code。"
+  "在当前工程根目录启动 Claude Code，请求走 CodeRelay。"
   (interactive)
   (let ((root (my/claude-project-root))
-        (buf my/claude-buffer))
+        (buf my/claude-buffer)
+        (key (my/coderelay-api-key)))
+    (unless key
+      (user-error "未找到 CodeRelay 密钥。请 export CODERELAY_API_KEY 或写入 ~/.config/coderelay/api-key"))
     (if (get-buffer buf)
         (pop-to-buffer buf)
-      (let ((default-directory root))
+      (let ((default-directory root)
+            (process-environment
+             (append
+              (list (concat "ANTHROPIC_AUTH_TOKEN=" key)
+                    (concat "ANTHROPIC_BASE_URL=" my/coderelay-base-url)
+                    "ANTHROPIC_API_KEY=")
+              process-environment)))
         (vterm buf)
         (run-with-timer
          0.4 nil
@@ -337,17 +360,19 @@
          ("C-c RET" . gptel-send))
   :config
   (setq gptel-default-mode 'org-mode
-        gptel-api-key (lambda ()
-                        (or (getenv "ANTHROPIC_API_KEY")
-                            (getenv "OPENAI_API_KEY")
-                            (getenv "OPENROUTER_API_KEY"))))
-  (when (or (getenv "ANTHROPIC_API_KEY")
-            (file-exists-p (expand-file-name "~/.authinfo"))
-            (file-exists-p (expand-file-name "~/.authinfo.gpg")))
-    (setq gptel-model 'claude-sonnet-4-6
-          gptel-backend (gptel-make-anthropic "Claude"
-                          :stream t
-                          :key gptel-api-key))))
+        gptel-api-key #'my/coderelay-api-key
+        gptel-model 'claude-sonnet-4-6
+        gptel-backend
+        (gptel-make-openai "CodeRelay"
+          :host my/coderelay-host
+          :protocol "https"
+          :endpoint "/v1/chat/completions"
+          :stream t
+          :key #'my/coderelay-api-key
+          :models '(claude-sonnet-4-6
+                    claude-sonnet-4-5
+                    claude-opus-4-6
+                    gpt-4o))))
 
 ;;; --------------------------------------------------------------------------
 ;;; 13. 剪贴板（WSL 与 Windows 互通）
