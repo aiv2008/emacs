@@ -95,6 +95,23 @@
 (my/setup-fonts)
 (add-hook 'after-make-frame-functions #'my/setup-fonts)
 
+;; 窗口分隔改成实线（覆盖 Treemacs / 分屏之间默认的虚线边框）。
+;; GTK 下 1px 仍可能发虚，所以宽度用 2，并把 first/last pixel 涂成同一色。
+(defun my/setup-window-dividers ()
+  "用像素实线替换默认的 vertical-border 虚线。"
+  (setq window-divider-default-places t
+        window-divider-default-right-width 2
+        window-divider-default-bottom-width 1)
+  (window-divider-mode 1)
+  (let ((color "#44475a")) ; Dracula current-line，可改
+    (dolist (face '(window-divider
+                    window-divider-first-pixel
+                    window-divider-last-pixel
+                    vertical-border))
+      (set-face-foreground face color)
+      (set-face-background face color))))
+(my/setup-window-dividers)
+
 ;;; --------------------------------------------------------------------------
 ;;; 4. 编辑习惯
 ;;; --------------------------------------------------------------------------
@@ -204,16 +221,39 @@
 ;;; --------------------------------------------------------------------------
 ;;; 10. 文件树 / 终端
 ;;; --------------------------------------------------------------------------
+(use-package nerd-icons
+  :ensure t
+  :init
+  (setq nerd-icons-font-family "Maple Mono NF"))
+
+(use-package treemacs-nerd-icons
+  :ensure t
+  :after treemacs nerd-icons)
+
+(defun my/treemacs-clean-gutter ()
+  "去掉文件树左侧的行号、fringe 和 || 竖线。"
+  (display-line-numbers-mode -1)
+  (when (display-graphic-p)
+    (set-window-fringes (selected-window) 0 0)))
+
 (use-package treemacs
-  :config
-  (treemacs-follow-mode t)
-  (treemacs-filewatch-mode t)
-  (treemacs-git-mode 'simple)
-  (setq treemacs-position 'left)
+  :ensure t
   :bind
   ("C-x t t" . treemacs)
   ("C-x t r" . treemacs-refresh)
-  ("C-x t p" . treemacs-add-project))
+  ("C-x t p" . treemacs-add-project)
+  :hook
+  (treemacs-mode . my/treemacs-clean-gutter)
+  :config
+  (require 'treemacs-nerd-icons)
+  (treemacs-load-theme "nerd-icons")
+  (treemacs-follow-mode t)
+  (treemacs-filewatch-mode t)
+  (treemacs-git-mode 'simple)
+  (treemacs-fringe-indicator-mode -1)
+  (setq treemacs-position 'left
+        treemacs-indentation 1
+        treemacs-indentation-string " "))
 
 (use-package vterm
   :bind ("C-x v" . vterm)
@@ -308,6 +348,35 @@
           gptel-backend (gptel-make-anthropic "Claude"
                           :stream t
                           :key gptel-api-key))))
+
+;;; --------------------------------------------------------------------------
+;;; 13. 剪贴板（WSL 与 Windows 互通）
+;;; --------------------------------------------------------------------------
+(setq select-enable-clipboard t
+      select-enable-primary t)
+
+(when (and (eq system-type 'gnu/linux)
+           (getenv "WSL_DISTRO_NAME"))
+  (my/add-bin-to-path "/mnt/c/Windows/System32")
+  ;; M-w：同时写入 Emacs kill-ring 和 Windows 剪贴板。
+  (defun wsl-clipboard-kill-ring-save (beg end)
+    (interactive "r")
+    (kill-ring-save beg end)
+    (let ((text (buffer-substring-no-properties beg end)))
+      (with-temp-buffer
+        (insert text)
+        (call-process-region (point-min) (point-max) "clip.exe"))))
+  (global-set-key [remap kill-ring-save] #'wsl-clipboard-kill-ring-save)
+  ;; M-v：从 Windows 剪贴板粘贴到 Emacs。
+  (defun wsl-paste-from-windows ()
+    (interactive)
+    (let ((text (shell-command-to-string "powershell.exe -Command Get-Clipboard")))
+      (insert text)))
+  (global-set-key (kbd "M-v") #'wsl-paste-from-windows))
+
+;;; --------------------------------------------------------------------------
+;;; 14. Custom（Emacs 自动写入，保持在文件末尾）
+;;; --------------------------------------------------------------------------
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
