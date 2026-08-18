@@ -16,7 +16,13 @@ cd ~/.emacs.d && git submodule update --init --recursive
 - 终端 Emacs（Ghostty）：字体改 `~/.config/ghostty/config` 的 `font-size`
 - 图形 Emacs：改 `init.el` 里的 `my/font-size`（Mac 需安装 Maple Mono NF）
 - 第一次开 vterm：macOS 上先 `brew install libvterm cmake`
-- API 密钥不要写进 `init.el`，用环境变量 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`
+- AI 走 [CodeRelay](https://coderelay.cn) 中转。密钥不要写进 `init.el`：
+
+```bash
+# 控制台复制 API Key 后：
+export CODERELAY_API_KEY="sk-..."    # 写进 ~/.zshrc 后重新开终端
+# 或：mkdir -p ~/.config/coderelay && 把 key 单独一行写入 ~/.config/coderelay/api-key
+```
 
 改完 `init.el` 后 `M-x eval-buffer` 或重启 Emacs。
 
