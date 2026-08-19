@@ -135,6 +135,28 @@
 (use-package rainbow-delimiters
   :hook (prog-mode . rainbow-delimiters-mode))
 
+;; 自动格式化代码。支持多种语言，保存时自动格式化。
+;; 需要安装对应的格式化工具：
+;;   - JavaScript/TypeScript: npm install -g prettier
+;;   - Python: pip install black
+;;   - Rust: rustup component add rustfmt
+;;   - Go: go install golang.org/x/tools/cmd/goimports@latest
+(use-package format-all
+  :commands format-all-mode
+  :hook (prog-mode . format-all-mode)
+  :config
+  (setq-default format-all-formatters
+                '(("JavaScript" prettier)
+                  ("TypeScript" prettier)
+                  ("TSX" prettier)
+                  ("JSON" prettier)
+                  ("CSS" prettier)
+                  ("HTML" prettier)
+                  ("Markdown" prettier)
+                  ("Python" black)
+                  ("Rust" rustfmt)
+                  ("Go" goimports))))
+
 ;;; --------------------------------------------------------------------------
 ;;; 5. 补全
 ;;; --------------------------------------------------------------------------
@@ -471,3 +493,87 @@
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  )
+
+
+;;; -------------------------------------------------------------------------
+;;; 15. EXWM (X Window Manager) - 仅在图形界面 X11 环境启用
+;;; -------------------------------------------------------------------------
+;; EXWM 需要真正的 X server。WSL 终端、macOS 和 SSH 会话中都不适用。
+;; 如需在 WSL 中使用，需先安装 X server（如 VcXsrv）并设置 DISPLAY。
+(when (and (eq window-system 'x)
+           (getenv "DISPLAY"))
+  (use-package exwm
+    :ensure t
+    :config
+
+    ;; Basic configuration
+    (require 'exwm)
+    (require 'exwm-config)
+    (require 'exwm-systemtray)
+    (require 'exwm-randr)
+
+    ;; Set workspace number
+    (setq exwm-workspace-number 4)
+
+    ;; Make class name the buffer name
+    (add-hook 'exwm-update-class-hook
+              (lambda ()
+                (exwm-workspace-rename-buffer exwm-class-name)))
+
+    ;; Global keybindings (available everywhere)
+    (setq exwm-input-global-keys
+          `(
+            ;; Reset to line-mode (pass keys to Emacs)
+            ([?\s-r] . exwm-reset)
+
+            ;; Switch workspace
+            ([?\s-w] . exwm-workspace-switch)
+
+            ;; Launch applications
+            ([?\s-&] . (lambda (command)
+                        (interactive (list (read-shell-command "$ ")))
+                        (start-process-shell-command command nil command)))
+
+            ;; Switch to workspace N
+            ,@(mapcar (lambda (i)
+                       `(,(kbd (format "s-%d" i)) .
+                         (lambda ()
+                           (interactive)
+                           (exwm-workspace-switch-create ,i))))
+                     (number-sequence 0 9))))
+
+    ;; Line-mode keybindings (when keys go to Emacs)
+    (setq exwm-input-simulation-keys
+          '(
+            ;; Movement
+            ([?\C-b] . [left])
+            ([?\C-f] . [right])
+            ([?\C-p] . [up])
+            ([?\C-n] . [down])
+            ([?\C-a] . [home])
+            ([?\C-e] . [end])
+            ([?\M-v] . [prior])
+            ([?\C-v] . [next])
+            ([?\C-d] . [delete])
+            ([?\C-k] . [S-end delete])
+            ;; Cut/paste
+            ([?\C-w] . [?\C-x])
+            ([?\M-w] . [?\C-c])
+            ([?\C-y] . [?\C-v])
+            ;; Search
+            ([?\C-s] . [?\C-f])))
+
+    ;; Enable system tray
+    (exwm-systemtray-enable)
+
+    ;; Start EXWM
+    (exwm-enable)))
+
+
+(defun open-chrome ()
+  "open google chrome browser."
+  (interactive)
+  (start-process "chrome" nil "chromium-browser"))
+;; then bind it to a key
+(global-set-key (kbd "C-c w") 'open-chrome)
+  
