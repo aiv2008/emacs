@@ -304,7 +304,7 @@
         treemacs-indentation-string " "))
 
 (use-package vterm
-  :bind ("C-x v" . vterm)
+  :bind ("C-c t" . vterm)
   :config
   (setq vterm-shell (or (getenv "SHELL") "/bin/bash")))
 
