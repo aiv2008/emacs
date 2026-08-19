@@ -57,7 +57,7 @@
 ;;; --------------------------------------------------------------------------
 (setq inhibit-startup-message t
       visible-bell t
-      line-spacing 0.1)
+      line-spacing 0.8)
 ;; macOS 菜单在系统顶栏，关掉会少一排系统菜单；Linux 仍隐藏。
 (if (eq system-type 'darwin)
     (menu-bar-mode 1)
@@ -78,7 +78,7 @@
 
 ;; 仅图形界面生效。GTK/WSL 必须用 "Family-SIZE"，只改 :height 不会变。
 (setq my/font-family "Maple Mono NF"
-      my/font-size 10) ; 单位 pt，建议 8–18
+      my/font-size 16) ; 单位 pt，建议 8–18
 
 (defun my/setup-fonts (&optional frame)
   "给 FRAME（默认当前 frame）套 Maple Mono。终端帧直接跳过。"
@@ -277,16 +277,46 @@
 ;;; --------------------------------------------------------------------------
 ;;; 9. Lean 4
 ;;; --------------------------------------------------------------------------
-(add-to-list 'load-path (expand-file-name "lean4-mode" user-emacs-directory))
-(require 'lean4-mode)
-(setq lean4-show-goal-buttons nil)
-;; lean4-mode 默认 hook 是 lsp-mode 的 #'lsp，和 eglot 冲突。
-(remove-hook 'lean4-mode-hook #'lsp)
-(add-hook 'lean4-mode-hook #'my/bind-xref-keys)
-(add-hook 'lean4-mode-hook
-          (lambda ()
-            (local-set-key (kbd "C-c C-g") #'lean4-toggle-info-buffer)
-            (local-set-key (kbd "M-/") #'company-complete)))
+;; lean4-mode 不在 MELPA，需要克隆到 ~/.emacs.d/lean4-mode。
+;; 依赖 dash / magit-section / lsp-mode；实际 LSP 仍用上面的 eglot。
+(use-package dash :ensure t)
+(use-package magit-section :ensure t)
+(use-package lsp-mode :ensure t :defer t)
+
+(defvar my/lean4-mode-dir
+  (expand-file-name "lean4-mode" user-emacs-directory))
+
+(defun my/ensure-lean4-mode ()
+  "若缺少 lean4-mode 则 git clone。成功可加载时返回非 nil。"
+  (let ((lib (expand-file-name "lean4-mode.el" my/lean4-mode-dir)))
+    (unless (file-exists-p lib)
+      (if (not (executable-find "git"))
+          (message "lean4-mode 未安装，且找不到 git")
+        (message "正在克隆 lean4-mode…")
+        (make-directory user-emacs-directory t)
+        (let ((status (call-process
+                       "git" nil "*lean4-mode-install*" t
+                       "clone" "--depth" "1"
+                       "https://github.com/leanprover-community/lean4-mode.git"
+                       my/lean4-mode-dir)))
+          (unless (eq status 0)
+            (message "克隆 lean4-mode 失败，见 *lean4-mode-install*")))))
+    (when (file-exists-p lib)
+      (add-to-list 'load-path my/lean4-mode-dir)
+      t)))
+
+(if (my/ensure-lean4-mode)
+    (progn
+      (require 'lean4-mode)
+      (setq lean4-show-goal-buttons nil)
+      ;; lean4-mode 默认 hook 是 lsp-mode 的 #'lsp，和 eglot 冲突。
+      (remove-hook 'lean4-mode-hook #'lsp)
+      (add-hook 'lean4-mode-hook #'my/bind-xref-keys)
+      (add-hook 'lean4-mode-hook
+                (lambda ()
+                  (local-set-key (kbd "C-c C-g") #'lean4-toggle-info-buffer)
+                  (local-set-key (kbd "M-/") #'company-complete))))
+  (message "lean4-mode 未加载。可手动执行：git clone --depth 1 https://github.com/leanprover-community/lean4-mode.git ~/.emacs.d/lean4-mode"))
 
 ;;; --------------------------------------------------------------------------
 ;;; 10. 文件树 / 终端
@@ -577,3 +607,5 @@
 ;; then bind it to a key
 (global-set-key (kbd "C-c w") 'open-chrome)
   
+;; 全局默认行间距，GUI图形窗口生效，终端-nnw无效
+(setq-default line-spacing 0.4)
