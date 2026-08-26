@@ -531,7 +531,8 @@
 ;; EXWM 需要真正的 X server。WSL 终端、macOS 和 SSH 会话中都不适用。
 ;; 如需在 WSL 中使用，需先安装 X server（如 VcXsrv）并设置 DISPLAY。
 (when (and (eq window-system 'x)
-           (getenv "DISPLAY"))
+           (getenv "DISPLAY")
+           (not (getenv "WSL_DISTRO_NAME")))  ; WSLg 下 window-system 也是 x，需排除 WSL
   (use-package exwm
     :ensure t
     :config
