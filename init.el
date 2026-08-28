@@ -78,7 +78,7 @@
 
 ;; 仅图形界面生效。GTK/WSL 必须用 "Family-SIZE"，只改 :height 不会变。
 (setq my/font-family "Maple Mono NF"
-      my/font-size 13) ; 单位 pt，建议 8–18
+      my/font-size 11) ; 单位 pt，建议 8–18
 
 (defun my/setup-fonts (&optional frame)
   "给 FRAME（默认当前 frame）套 Maple Mono。终端帧直接跳过。"
@@ -473,6 +473,11 @@
 
 (keymap-set global-map "C-c c" my/claude-command-map)
 
+;; Org 里允许 Shift+方向键直接选择文本（gptel / org buffer 通用），消除
+;; 左下角 "To use shift-selection with Org mode..." 提示。
+;; 若希望在标题/条目行也能用 Shift 选择文本，把 t 改成 'always。
+(setq org-support-shift-select t)
+
 ;; 对话 / 改写。C-c g 开聊天；选中文字后 C-c RET 发送；C-u C-c RET 选模型。
 ;; gptel 的回复是普通 org 文本 buffer，可直接 M-w 键盘复制（WSL 下会同步到
 ;; Windows 剪贴板），这正是「原生集成、可键盘复制」的意义。
@@ -530,7 +535,41 @@
           :models '(claude-sonnet-4-6
                     claude-sonnet-4-5
                     claude-opus-4-6
-                    gpt-4o))))
+                    gpt-4o)))
+
+  ;; ---- 工具调用：让 Claude 直接读项目文件 ----
+  ;; CodeRelay 已实测支持 OpenAI 兼容的 tools 参数（curl 验证通过）。
+  ;; 用法：C-u C-c RET 打开 gptel 菜单 → 按 t 选择工具 → 勾选后发送。
+  ;; 下面两个工具在新会话默认启用，可在菜单里随时开关。
+  (gptel-make-tool
+   :name "read_text_file"
+   :description "Read and return the full contents of a local text or code file. The path argument must be an absolute path, e.g. /home/anson/workspace/project/src/main.js. If the file does not exist or cannot be read, return an error message instead."
+   :function (lambda (path)
+               (condition-case err
+                   (with-temp-buffer
+                     (insert-file-contents path)
+                     (buffer-string))
+                 (error (format "读取文件失败: %s" (error-message-string err)))))
+   :args (list '(:name "path" :type string
+                 :description "要读取文件的绝对路径，例如 /home/anson/workspace/project/src/main.js")))
+
+  (gptel-make-tool
+   :name "list_directory"
+   :description "List the names of files and subdirectories in a directory. The path argument must be an absolute directory path."
+   :function (lambda (path)
+               (condition-case err
+                   (mapconcat #'identity (directory-files path) "\n")
+                 (error (format "列目录失败: %s" (error-message-string err)))))
+   :args (list '(:name "path" :type string
+                 :description "要列出的目录的绝对路径")))
+
+  ;; 新会话默认启用上面两个工具（可在 gptel 菜单 t 里再调整）
+  (add-hook 'gptel-mode-hook
+            (lambda ()
+              (setq-local gptel-tools
+                          (delq nil
+                                (mapcar (lambda (n) (ignore-errors (gptel-get-tool n)))
+                                        '("read_text_file" "list_directory")))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; 13. 剪贴板（WSL 与 Windows 互通）
