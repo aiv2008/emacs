@@ -1,4 +1,4 @@
-;;; init.el --- Anson 的 Emacs 配置 -*- lexical-binding: t; -*-
+;; init.el --- Anson 的 Emacs 配置 -*- lexical-binding: t; -*-
 ;;;
 ;;; 同一份配置给 Linux（WSL）和 macOS 用。
 ;;; 终端 Emacs（Ghostty 里跑 emacs）：字体改 ~/.config/ghostty/config 的 font-size。
@@ -78,7 +78,7 @@
 
 ;; 仅图形界面生效。GTK/WSL 必须用 "Family-SIZE"，只改 :height 不会变。
 (setq my/font-family "Maple Mono NF"
-      my/font-size 16) ; 单位 pt，建议 8–18
+      my/font-size 13) ; 单位 pt，建议 8–18
 
 (defun my/setup-fonts (&optional frame)
   "给 FRAME（默认当前 frame）套 Maple Mono。终端帧直接跳过。"
@@ -121,6 +121,19 @@
               tab-width 2)
 (auto-save-visited-mode 1) ; 自动把已访问文件写回磁盘
 (put 'upcase-region 'disabled nil)
+
+;; ----------------各个语言强制缩进2空格----------------
+;; C/C++/Java
+(setq c-basic-offset 2)
+;; JavaScript / Typescript
+(setq js-indent-level 2)
+;; HTML XML
+(setq sgml-basic-offset 2)
+;; Python 注意：PEP8标准是4空格，如果你确定要2空格才改
+(setq python-indent-offset 2)
+
+;; 开启智能自动缩进，回车自动对齐
+(electric-indent-mode 1)
 
 ;; C-z 默认是 suspend，改成撤销。C-x k 仍是默认的 kill-buffer（会询问名字）。
 (global-set-key (kbd "C-z") 'undo)
@@ -234,17 +247,14 @@
   :mode (("\\.md\\'" . markdown-mode)
          ("\\.markdown\\'" . markdown-mode))
   :bind (:map markdown-mode-map
-              ("C-c C-c p" . markdown-preview-mode))
+              ("C-c C-c l" . markdown-live-preview-mode)  ; Live preview in Emacs
+              ("C-c C-c v" . markdown-preview))            ; Export and view HTML
   :config
-  (setq markdown-command "pandoc"))
-
-(use-package markdown-preview-mode
-  :after markdown-mode
-  :config
-  (setq markdown-preview-stylesheets
-        (list "https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.1.0/github-markdown.min.css")
-        markdown-preview-javascript
-        (list "https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.1.0/github-markdown.min.css")))
+  (setq markdown-command "pandoc"
+        ;; View markdown files in Emacs instead of opening browser
+        markdown-open-command nil
+        ;; Use EWW (Emacs Web Wowser) for preview - works without xwidget
+        markdown-live-preview-window-function 'markdown-live-preview-window-eww))
 
 ;;; --------------------------------------------------------------------------
 ;;; 9. LSP（eglot）
@@ -464,9 +474,48 @@
 (keymap-set global-map "C-c c" my/claude-command-map)
 
 ;; 对话 / 改写。C-c g 开聊天；选中文字后 C-c RET 发送；C-u C-c RET 选模型。
+;; gptel 的回复是普通 org 文本 buffer，可直接 M-w 键盘复制（WSL 下会同步到
+;; Windows 剪贴板），这正是「原生集成、可键盘复制」的意义。
+;; 额外快捷键：C-c c g 开 gptel；C-c c y 一键复制最近一条 assistant 回复。
 (use-package gptel
   :bind (("C-c g" . gptel)
          ("C-c RET" . gptel-send))
+  :init
+  ;; 并入 C-c c 前缀：c=CLI, t=切换, r=发选区, g=gptel, y=复制回复。
+  ;; 放 :init 里，重启后立即可用，不依赖 gptel 是否已触发加载。
+  (keymap-set my/claude-command-map "g" #'gptel)
+
+  (defun my/gptel-buffer ()
+    "返回当前 gptel 会话 buffer；找不到返回 nil。"
+    (catch 'found
+      (dolist (b (buffer-list))
+        (when (with-current-buffer b (derived-mode-p 'gptel-mode))
+          (throw 'found b)))))
+
+  (defun my/gptel-copy-last-reply ()
+    "把 gptel 会话最后一条 assistant 回复复制进 kill-ring（含剪贴板）。"
+    (interactive)
+    (let ((buf (my/gptel-buffer)))
+      (unless buf
+        (user-error "没有 gptel 会话；先用 C-c g 开聊天"))
+      (with-current-buffer buf
+        (save-excursion
+          (goto-char (point-max))
+          (unless (re-search-backward "^\\*+[[:space:]]+assistant" nil t)
+            (user-error "会话里还没有 assistant 回复"))
+          (let ((beg (progn (forward-line 1) (point))))
+            (if (re-search-forward "^\\*+[[:space:]]+" nil t)
+                (goto-char (match-beginning 0))
+              (goto-char (point-max)))
+            (when (< (point) beg) (goto-char beg))
+            (let ((text (string-trim
+                         (buffer-substring-no-properties beg (point)))))
+              (if (string-empty-p text)
+                  (user-error "最后一条回复为空")
+                (kill-new text)
+                (message "已复制最近一条回复（%d 字符）" (length text)))))))))
+
+  (keymap-set my/claude-command-map "y" #'my/gptel-copy-last-reply)
   :config
   (setq gptel-default-mode 'org-mode
         gptel-api-key #'my/coderelay-api-key
@@ -539,7 +588,6 @@
 
     ;; Basic configuration
     (require 'exwm)
-    (require 'exwm-config)
     (require 'exwm-systemtray)
     (require 'exwm-randr)
 
