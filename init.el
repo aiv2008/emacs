@@ -78,7 +78,7 @@
 
 ;; 仅图形界面生效。GTK/WSL 必须用 "Family-SIZE"，只改 :height 不会变。
 (setq my/font-family "Maple Mono NF"
-      my/font-size 11) ; 单位 pt，建议 8–18
+      my/font-size 13) ; 单位 pt，建议 8–18
 
 (defun my/setup-fonts (&optional frame)
   "给 FRAME（默认当前 frame）套 Maple Mono。终端帧直接跳过。"
@@ -165,6 +165,7 @@
                   ("JSON" prettier)
                   ("CSS" prettier)
                   ("HTML" prettier)
+                  ("Vue" prettier)
                   ("Markdown" prettier)
                   ("Python" black)
                   ("Rust" rustfmt)
@@ -227,7 +228,7 @@
   (local-set-key (kbd "M-,") #'xref-pop-marker-stack))
 
 ;;; --------------------------------------------------------------------------
-;;; 7. TypeScript / TSX / JS
+;;; 7. TypeScript / TSX / JS / Vue
 ;;; --------------------------------------------------------------------------
 (use-package typescript-mode
   :mode "\\.ts\\'"
@@ -239,6 +240,35 @@
 (add-to-list 'auto-mode-alist '("\\.tsx\\'" . typescriptreact-mode))
 (add-hook 'typescriptreact-mode-hook #'my/bind-xref-keys)
 (add-hook 'js-mode-hook #'my/bind-xref-keys)
+
+;; Vue.js 支持
+;; 需要安装 volar 语言服务器：npm install -g @vue/language-server
+(use-package web-mode
+  :mode ("\\.vue\\'" "\\.html\\'")
+  :hook (web-mode . my/bind-xref-keys)
+  :config
+  (setq web-mode-markup-indent-offset 2
+        web-mode-css-indent-offset 2
+        web-mode-code-indent-offset 2
+        web-mode-style-padding 2
+        web-mode-script-padding 2
+        web-mode-enable-auto-closing t
+        web-mode-enable-auto-pairing t
+        web-mode-enable-current-element-highlight t
+        web-mode-enable-current-column-highlight t)
+  ;; Vue 文件识别
+  (setq web-mode-content-types-alist
+        '(("vue" . "\\.vue\\'"))))
+
+;; 为 Vue 文件配置 eglot（使用 volar）
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(web-mode . ("vue-language-server" "--stdio")))
+  ;; 当打开 .vue 文件时自动启动 eglot
+  (add-hook 'web-mode-hook
+            (lambda ()
+              (when (string-equal (file-name-extension buffer-file-name) "vue")
+                (eglot-ensure)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; 8. Markdown
@@ -473,54 +503,10 @@
 
 (keymap-set global-map "C-c c" my/claude-command-map)
 
-;; Org 里允许 Shift+方向键直接选择文本（gptel / org buffer 通用），消除
-;; 左下角 "To use shift-selection with Org mode..." 提示。
-;; 若希望在标题/条目行也能用 Shift 选择文本，把 t 改成 'always。
-(setq org-support-shift-select t)
-
 ;; 对话 / 改写。C-c g 开聊天；选中文字后 C-c RET 发送；C-u C-c RET 选模型。
-;; gptel 的回复是普通 org 文本 buffer，可直接 M-w 键盘复制（WSL 下会同步到
-;; Windows 剪贴板），这正是「原生集成、可键盘复制」的意义。
-;; 额外快捷键：C-c c g 开 gptel；C-c c y 一键复制最近一条 assistant 回复。
 (use-package gptel
   :bind (("C-c g" . gptel)
          ("C-c RET" . gptel-send))
-  :init
-  ;; 并入 C-c c 前缀：c=CLI, t=切换, r=发选区, g=gptel, y=复制回复。
-  ;; 放 :init 里，重启后立即可用，不依赖 gptel 是否已触发加载。
-  (keymap-set my/claude-command-map "g" #'gptel)
-
-  (defun my/gptel-buffer ()
-    "返回当前 gptel 会话 buffer；找不到返回 nil。"
-    (catch 'found
-      (dolist (b (buffer-list))
-        (when (with-current-buffer b (derived-mode-p 'gptel-mode))
-          (throw 'found b)))))
-
-  (defun my/gptel-copy-last-reply ()
-    "把 gptel 会话最后一条 assistant 回复复制进 kill-ring（含剪贴板）。"
-    (interactive)
-    (let ((buf (my/gptel-buffer)))
-      (unless buf
-        (user-error "没有 gptel 会话；先用 C-c g 开聊天"))
-      (with-current-buffer buf
-        (save-excursion
-          (goto-char (point-max))
-          (unless (re-search-backward "^\\*+[[:space:]]+assistant" nil t)
-            (user-error "会话里还没有 assistant 回复"))
-          (let ((beg (progn (forward-line 1) (point))))
-            (if (re-search-forward "^\\*+[[:space:]]+" nil t)
-                (goto-char (match-beginning 0))
-              (goto-char (point-max)))
-            (when (< (point) beg) (goto-char beg))
-            (let ((text (string-trim
-                         (buffer-substring-no-properties beg (point)))))
-              (if (string-empty-p text)
-                  (user-error "最后一条回复为空")
-                (kill-new text)
-                (message "已复制最近一条回复（%d 字符）" (length text)))))))))
-
-  (keymap-set my/claude-command-map "y" #'my/gptel-copy-last-reply)
   :config
   (setq gptel-default-mode 'org-mode
         gptel-api-key #'my/coderelay-api-key
@@ -535,41 +521,7 @@
           :models '(claude-sonnet-4-6
                     claude-sonnet-4-5
                     claude-opus-4-6
-                    gpt-4o)))
-
-  ;; ---- 工具调用：让 Claude 直接读项目文件 ----
-  ;; CodeRelay 已实测支持 OpenAI 兼容的 tools 参数（curl 验证通过）。
-  ;; 用法：C-u C-c RET 打开 gptel 菜单 → 按 t 选择工具 → 勾选后发送。
-  ;; 下面两个工具在新会话默认启用，可在菜单里随时开关。
-  (gptel-make-tool
-   :name "read_text_file"
-   :description "Read and return the full contents of a local text or code file. The path argument must be an absolute path, e.g. /home/anson/workspace/project/src/main.js. If the file does not exist or cannot be read, return an error message instead."
-   :function (lambda (path)
-               (condition-case err
-                   (with-temp-buffer
-                     (insert-file-contents path)
-                     (buffer-string))
-                 (error (format "读取文件失败: %s" (error-message-string err)))))
-   :args (list '(:name "path" :type string
-                 :description "要读取文件的绝对路径，例如 /home/anson/workspace/project/src/main.js")))
-
-  (gptel-make-tool
-   :name "list_directory"
-   :description "List the names of files and subdirectories in a directory. The path argument must be an absolute directory path."
-   :function (lambda (path)
-               (condition-case err
-                   (mapconcat #'identity (directory-files path) "\n")
-                 (error (format "列目录失败: %s" (error-message-string err)))))
-   :args (list '(:name "path" :type string
-                 :description "要列出的目录的绝对路径")))
-
-  ;; 新会话默认启用上面两个工具（可在 gptel 菜单 t 里再调整）
-  (add-hook 'gptel-mode-hook
-            (lambda ()
-              (setq-local gptel-tools
-                          (delq nil
-                                (mapcar (lambda (n) (ignore-errors (gptel-get-tool n)))
-                                        '("read_text_file" "list_directory")))))))
+                    gpt-4o))))
 
 ;;; --------------------------------------------------------------------------
 ;;; 13. 剪贴板（WSL 与 Windows 互通）
