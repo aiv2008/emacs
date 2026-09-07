@@ -119,7 +119,13 @@
 ;;; --------------------------------------------------------------------------
 (setq-default indent-tabs-mode nil
               tab-width 2)
-(auto-save-visited-mode 1) ; 自动把已访问文件写回磁盘
+;; 自动保存已访问文件，但增加保存间隔避免频繁触发
+(auto-save-visited-mode 1)
+(setq auto-save-visited-interval 30) ; 从默认 5 秒改为 30 秒
+
+;; 在 vterm 终端模式下禁用自动保存，避免焦点跳转
+(add-hook 'vterm-mode-hook
+          (lambda () (auto-save-visited-mode -1)))
 (put 'upcase-region 'disabled nil)
 
 ;; ----------------各个语言强制缩进2空格----------------
