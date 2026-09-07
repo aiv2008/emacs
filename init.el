@@ -78,7 +78,7 @@
 
 ;; 仅图形界面生效。GTK/WSL 必须用 "Family-SIZE"，只改 :height 不会变。
 (setq my/font-family "Maple Mono NF"
-      my/font-size 13) ; 单位 pt，建议 8–18
+      my/font-size 11) ; 单位 pt，建议 8–18
 
 (defun my/setup-fonts (&optional frame)
   "给 FRAME（默认当前 frame）套 Maple Mono。终端帧直接跳过。"
@@ -241,7 +241,7 @@
 (add-hook 'typescriptreact-mode-hook #'my/bind-xref-keys)
 (add-hook 'js-mode-hook #'my/bind-xref-keys)
 
-;; Vue.js 支持
+;; Vue.js 支持（Vue 2 & Vue 3）
 ;; 需要安装 volar 语言服务器：npm install -g @vue/language-server
 (use-package web-mode
   :mode ("\\.vue\\'" "\\.html\\'")
@@ -252,23 +252,37 @@
         web-mode-code-indent-offset 2
         web-mode-style-padding 2
         web-mode-script-padding 2
+        web-mode-block-padding 0
         web-mode-enable-auto-closing t
         web-mode-enable-auto-pairing t
+        web-mode-enable-auto-quoting t
         web-mode-enable-current-element-highlight t
-        web-mode-enable-current-column-highlight t)
+        web-mode-enable-current-column-highlight t
+        ;; Vue 2 使用 element-ui 等库时，识别自定义标签
+        web-mode-enable-html-entities-fontification t
+        web-mode-enable-css-colorization t
+        web-mode-enable-comment-interpolation t
+        web-mode-enable-heredoc-fontification t)
   ;; Vue 文件识别
   (setq web-mode-content-types-alist
-        '(("vue" . "\\.vue\\'"))))
-
-;; 为 Vue 文件配置 eglot（使用 volar）
-(with-eval-after-load 'eglot
-  (add-to-list 'eglot-server-programs
-               '(web-mode . ("vue-language-server" "--stdio")))
-  ;; 当打开 .vue 文件时自动启动 eglot
+        '(("vue" . "\\.vue\\'")))
+  ;; 为 Vue 文件启用 eglot
   (add-hook 'web-mode-hook
             (lambda ()
-              (when (string-equal (file-name-extension buffer-file-name) "vue")
+              (when (and buffer-file-name
+                         (string-equal (file-name-extension buffer-file-name) "vue"))
                 (eglot-ensure)))))
+
+;; 为 Vue 文件配置 eglot（使用 @vue/language-server）
+(with-eval-after-load 'eglot
+  ;; Vue 语言服务器配置
+  (add-to-list 'eglot-server-programs
+               '(web-mode . ("vue-language-server" "--stdio")))
+
+  ;; Vue 2 项目特定设置：告诉 volar 使用 Vue 2 模式
+  (setq-default eglot-workspace-configuration
+                '(:vue (:server (:hybridMode :json-false
+                                :typescript (:tsdk "node_modules/typescript/lib"))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; 8. Markdown
@@ -529,24 +543,37 @@
 (setq select-enable-clipboard t
       select-enable-primary t)
 
+;; WSLg 会把 X/Wayland 剪贴板同步到 Windows，M-w 后可在 Windows 里粘贴。
+;; 不要再同步调用 clip.exe / powershell.exe：会把 weston 打崩，GTK Emacs 跟着闪退。
 (when (and (eq system-type 'gnu/linux)
            (getenv "WSL_DISTRO_NAME"))
-  (my/add-bin-to-path "/mnt/c/Windows/System32")
-  ;; M-w：同时写入 Emacs kill-ring 和 Windows 剪贴板。
-  (defun wsl-clipboard-kill-ring-save (beg end)
-    (interactive "r")
-    (kill-ring-save beg end)
-    (let ((text (buffer-substring-no-properties beg end)))
-      (with-temp-buffer
-        (insert text)
-        (call-process-region (point-min) (point-max) "clip.exe"))))
-  (global-set-key [remap kill-ring-save] #'wsl-clipboard-kill-ring-save)
-  ;; M-v：从 Windows 剪贴板粘贴到 Emacs。
-  (defun wsl-paste-from-windows ()
+  (defun my/wsl-wl-copy (text &optional _push)
+    (when (and (executable-find "wl-copy") (getenv "WAYLAND_DISPLAY"))
+      (let ((process-connection-type nil)
+            (proc (start-process "wl-copy" nil "wl-copy" "-n")))
+        (process-send-string proc text)
+        (process-send-eof proc))))
+  (defun my/wsl-wl-paste ()
+    (when (and (executable-find "wl-paste") (getenv "WAYLAND_DISPLAY"))
+      (let ((text (string-chop-newline
+                   (shell-command-to-string "wl-paste -n 2>/dev/null"))))
+        (unless (string-empty-p text) text))))
+  ;; 图形 Emacs：原生 CLIPBOARD 已由 WSLg 同步到 Windows。
+  ;; 终端 Emacs：没有 X 选区，改走 wl-copy / wl-paste。
+  (defun my/wsl-setup-terminal-clipboard ()
+    (unless (display-graphic-p)
+      (setq interprogram-cut-function #'my/wsl-wl-copy
+            interprogram-paste-function #'my/wsl-wl-paste)))
+  (add-hook 'tty-setup-hook #'my/wsl-setup-terminal-clipboard)
+  (my/wsl-setup-terminal-clipboard)
+  (defun wsl-paste-from-clipboard ()
+    "从 Wayland/X 剪贴板粘贴（WSLg 会同步 Windows）。"
     (interactive)
-    (let ((text (shell-command-to-string "powershell.exe -Command Get-Clipboard")))
-      (insert text)))
-  (global-set-key (kbd "M-v") #'wsl-paste-from-windows))
+    (let ((text (or (ignore-errors (gui-get-selection 'CLIPBOARD))
+                    (my/wsl-wl-paste))))
+      (if text (insert text)
+        (user-error "Clipboard is empty"))))
+  (global-set-key (kbd "M-v") #'wsl-paste-from-clipboard))
 
 ;;; --------------------------------------------------------------------------
 ;;; 14. Custom（Emacs 自动写入，保持在文件末尾）
