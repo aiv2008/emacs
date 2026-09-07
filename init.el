@@ -412,7 +412,29 @@
 (use-package vterm
   :bind ("C-c t" . vterm)
   :config
-  (setq vterm-shell (or (getenv "SHELL") "/bin/bash")))
+  (setq vterm-shell (or (getenv "SHELL") "/bin/bash"))
+  ;; pyim 会在当前 buffer 里 insert 预览字符串。vterm 的内容由 libvterm 独占，
+  ;; 一插入中文/拼音就会和重绘打架，Emacs 马上卡死。所以 vterm 里禁止开 pyim。
+  (advice-remove 'vterm--self-insert #'my/vterm-self-insert-with-ime)
+  (add-hook 'vterm-mode-hook #'deactivate-input-method)
+  (defun my/vterm-send-utf8 (text)
+    "把 TEXT 写入 PTY，不往 vterm buffer 里 insert，也不等待进程。"
+    (when (and vterm--term (stringp text) (> (length text) 0))
+      (let ((inhibit-redisplay t)
+            (inhibit-read-only t))
+        (dolist (char (string-to-list text))
+          (vterm--update vterm--term (char-to-string char)))
+        (setq vterm--redraw-immediately t))))
+  (defun my/vterm-pyim-read-and-send ()
+    "在 minibuffer 里用 pyim 组字，再发给 vterm。"
+    (interactive)
+    (let ((text (minibuffer-with-setup-hook
+                    (lambda () (activate-input-method "pyim"))
+                  (read-from-minibuffer "发给终端: "))))
+      (unless (string-empty-p text)
+        (my/vterm-send-utf8 text))))
+  (define-key vterm-mode-map (kbd "C-\\") #'my/vterm-pyim-read-and-send)
+  (define-key vterm-mode-map (kbd "C-c i") #'my/vterm-pyim-read-and-send))
 
 ;;; --------------------------------------------------------------------------
 ;;; 11. Git（Magit）
@@ -676,3 +698,19 @@
   
 ;; 全局默认行间距，GUI图形窗口生效，终端-nnw无效
 (setq-default line-spacing 0.4)
+
+;; 替换原来所有 chinese-pyim 相关的配置
+(use-package pyim
+  :ensure t
+  :demand t
+  :custom
+  (pyim-default-scheme 'quanpin)      ; 全拼;双拼用户改成 'shuangpin
+  (pyim-page-length 9)
+  :config
+  (setq default-input-method "pyim")  ; 注意:是 "pyim",不是 "chinese-pyim"
+  (global-set-key (kbd "C-\\") 'toggle-input-method))
+
+(use-package pyim-basedict            ; 拼音词库,不加它打不出候选字
+  :ensure t
+  :config
+  (pyim-basedict-enable))
