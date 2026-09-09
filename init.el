@@ -611,7 +611,12 @@
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
- '(package-selected-packages nil))
+ '(package-selected-packages
+   '(comment-dwim-2 company dracula-theme exec-path-from-shell exwm
+                    format-all git-gutter gptel lsp-mode magit
+                    marginalia orderless pyim pyim-basedict
+                    rainbow-delimiters treemacs-nerd-icons
+                    typescript-mode vertico vterm web-mode xr)))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
@@ -634,7 +639,6 @@
 
     ;; Basic configuration
     (require 'exwm)
-    (require 'exwm-systemtray)
     (require 'exwm-randr)
 
     ;; Set workspace number
@@ -688,11 +692,11 @@
             ;; Search
             ([?\C-s] . [?\C-f])))
 
-    ;; Enable system tray
-    (exwm-systemtray-enable)
+    
 
     ;; Start EXWM
-    (exwm-enable)))
+    ;; (exwm-enable)
+    ))
 
 
 (defun open-chrome ()
@@ -720,3 +724,8 @@
   :ensure t
   :config
   (pyim-basedict-enable))
+
+
+
+
+
