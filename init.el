@@ -154,6 +154,13 @@
 (use-package rainbow-delimiters
   :hook (prog-mode . rainbow-delimiters-mode))
 
+;; ---- 让 GUI Emacs 找到 mise 管理的命令行工具（prettier 等）----
+(dolist (dir (list (expand-file-name "~/.local/share/mise/shims")
+                   (expand-file-name "~/.local/share/mise/installs/node/latest/bin")))
+  (when (file-directory-p dir)
+    (add-to-list 'exec-path dir)
+    (setenv "PATH" (concat dir ":" (getenv "PATH")))))
+
 ;; 自动格式化代码。支持多种语言，保存时自动格式化。
 ;; 需要安装对应的格式化工具：
 ;;   - JavaScript/TypeScript: npm install -g prettier
