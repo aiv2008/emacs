@@ -732,7 +732,16 @@
   :config
   (pyim-basedict-enable))
 
+;; ── 读写一律 UTF-8：两个平台都建议 ──
+(prefer-coding-system 'utf-8-unix)
+(set-language-environment "UTF-8")
 
+;; ── 只对 Windows 生效：绕开系统 ANSI 代码页（GBK）接管写文件 ──
+(when (eq system-type 'windows-nt)
+  (setq default-process-coding-system '(utf-8-unix . utf-8-unix)
+        coding-system-for-write 'utf-8-unix))
 
-
-
+;; ── 可选：让新 buffer 默认 UTF-8 换行。放 after-init-hook，
+;;     免得被 language-environment 后续覆盖 ──
+(add-hook 'after-init-hook
+          (lambda () (setq-default buffer-file-coding-system 'utf-8-unix)))
