@@ -377,38 +377,6 @@
     (let ((default-directory (file-name-as-directory root)))
       (compile cmd))))
 
-(defun my/lean-info-at-point ()
-  "把光标处的类型 / 期望类型 / 证明目标显示到 *Lean Info* 里。
-走 eglot 的 textDocument/hover、$/lean/plainTermGoal、$/lean/plainGoal，
-所以不依赖 lsp-mode（lean4-mode 自带的 lean4-toggle-info 是 lsp-mode 实现，
-在 eglot 下会报 \"does not support method $/lean/plainGoal\"）。"
-  (interactive)
-  (let ((server (or (eglot-current-server) (user-error "当前 buffer 没有 eglot 连接")))
-        (params (eglot--TextDocumentPositionParams))
-        (pos (format "%s:%d" (buffer-name) (line-number-at-pos))))
-    (let* ((hover (ignore-errors (eglot--request server :textDocument/hover params :timeout 15)))
-           (term  (ignore-errors (eglot--request server "$/lean/plainTermGoal" params :timeout 15)))
-           (goal  (ignore-errors (eglot--request server "$/lean/plainGoal" params :timeout 15)))
-           (buf (get-buffer-create "*Lean Info*")))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert (format "位置：%s\n\n" pos))
-          (let ((hv (and hover (plist-get (plist-get hover :contents) :value))))
-            (when (and hv (not (string-empty-p hv)))
-              (insert "── 光标处类型 ──\n" hv "\n\n")))
-          (when-let* ((g (plist-get term :goal)))
-            (insert "── 期望类型 ──\n" g "\n\n"))
-          (when-let* ((gs (plist-get goal :goals)))
-            (insert "── 证明目标 ──\n"
-                    (if (listp gs) (mapconcat #'identity gs "\n") (format "%s" gs))
-                    "\n\n"))
-          (when (= (point-min) (point-max))
-            (insert "这里没有可显示的信息。\n")))
-        (special-mode)
-        (goto-char (point-min)))
-      (display-buffer buf))))
-
 (if (my/ensure-lean4-mode)
     (progn
       (require 'lean4-mode)
@@ -418,11 +386,9 @@
       (add-hook 'lean4-mode-hook #'my/bind-xref-keys)
       (add-hook 'lean4-mode-hook
                 (lambda ()
-                  ;; C-c C-g：自写的 eglot 版信息面板（类型 / 期望类型 / 证明目标）。
-                  ;; 不用 lean4-toggle-info：那是 lsp-mode 的实现，eglot 下会报
-                  ;; "does not support method $/lean/plainGoal"；
-                  ;; 也不用 lean4-toggle-info-buffer：它要 buffer 参数，不是交互命令。
-                  (local-set-key (kbd "C-c C-g") #'my/lean-info-at-point)
+                  ;; lean4-toggle-info-buffer 需要 buffer 参数，不是交互命令（按了会报
+                  ;; Wrong number of arguments）；交互入口是 lean4-toggle-info。
+                  (local-set-key (kbd "C-c C-g") #'lean4-toggle-info)
                   ;; 原生 C-c C-x / C-c C-l（lean4-execute）在 WinGet 版 elan 下会因
                   ;; lean4-rootdir 推导错误而失败，换成走 PATH 里 lake 的版本。
                   (local-set-key (kbd "C-c C-x") #'my/lean-run)   ; 跑整个文件（看 #eval）
