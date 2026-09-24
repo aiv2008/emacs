@@ -281,6 +281,18 @@
 
 ;; 注：Vue 相关的 eglot 配置已挪到文件末尾「7b. Vue 2」一节
 
+(setq company-transformers
+      '(company-sort-by-backend-importance
+        (lambda (candidates)
+          (sort candidates
+                (lambda (c1 c2)
+                  ;; capf candidate: (display . metadata)
+                  (let ((s1 (if (consp c1) (car c1) c1))
+                        (s2 (if (consp c2) (car c2) c2)))
+                    (string-lessp s1 s2)))))))
+
+
+
 ;;; --------------------------------------------------------------------------
 ;;; 8. Markdown
 ;;; --------------------------------------------------------------------------
