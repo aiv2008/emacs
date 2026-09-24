@@ -280,18 +280,13 @@
   )
 
 ;; 注：Vue 相关的 eglot 配置已挪到文件末尾「7b. Vue 2」一节
-
-(setq company-transformers
-      '(company-sort-by-backend-importance
-        (lambda (candidates)
-          (sort candidates
-                (lambda (c1 c2)
-                  ;; capf candidate: (display . metadata)
-                  (let ((s1 (if (consp c1) (car c1) c1))
-                        (s2 (if (consp c2) (car c2) c2)))
-                    (string-lessp s1 s2)))))))
-
-
+(use-package company
+  :config
+  ;; 核心：补全候选排序函数，优先前缀匹配
+  (setq company-transformers '(company-sort-prefer-same-case-prefix))
+  ;; 如果你还有其他 transformer，可以追加，例如：
+  ; (setq company-transformers '(company-sort-prefer-same-case-prefix company-sort-by-occurrence))
+  )
 
 ;;; --------------------------------------------------------------------------
 ;;; 8. Markdown
