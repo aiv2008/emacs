@@ -674,8 +674,9 @@
    '(comment-dwim-2 company dracula-theme exec-path-from-shell exwm
                     format-all git-gutter gptel lsp-mode magit
                     marginalia orderless pyim pyim-basedict
-                    rainbow-delimiters treemacs-nerd-icons
-                    typescript-mode vertico vterm web-mode xr)))
+                    rainbow-delimiters solidity-mode
+                    treemacs-nerd-icons typescript-mode vertico vterm
+                    web-mode xr)))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
@@ -1047,6 +1048,18 @@ Volar 2.x 在 `vue.hybridMode' 为 false 时自带 TypeScript，不需要编辑�
 (add-to-list 'eglot-server-programs
              (cons (list 'vue2-web-mode :language-id "vue")
                    #'mvue--server-contact))
+
+;;; 注册服务器 solidity
+;; nomicfoundation-solidity-language-server 必须带 --stdio：
+;; 它的 ConnectionStrategy 只在 argv 里有参数时才解析，裸跑会直接
+;; "Connection input stream is not set" 退出（exit 1），
+;; eglot 于是报 "[eglot] -1: Server died"，M-. 没有 backend，自然跳不动。
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(solidity-mode . ("nomicfoundation-solidity-language-server" "--stdio"))))
+(add-hook 'solidity-mode-hook #'eglot-ensure)
+(setq eglot-extend-to-xref t)
+
 
 ;;; --------------------------------------------------------------------------
 ;;; 7b.6. 每个 .vue buffer 的接线：eglot、company、xref 快捷键
