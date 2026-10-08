@@ -437,6 +437,65 @@
                   (local-set-key (kbd "M-/") #'company-complete))))
   (message "lean4-mode 未加载。可手动执行：git clone --depth 1 https://github.com/leanprover-community/lean4-mode.git ~/.emacs.d/lean4-mode"))
 
+
+;;; ==================== Mojo ====================
+;; 1) 路径（二选一，按你实际装的位置改）
+(defvar my/mojo-lsp-server "~/.pixi/bin/mojo-lsp-server")          ; 全局
+;; (defvar my/mojo-lsp-server "/home/anson/workspace/hello-world/.pixi/envs/default/bin/mojo-lsp-server")
+
+(defvar my/mojo-cli "~/.pixi/envs/mojo/bin/mojo")                  ; 全局
+;; (defvar my/mojo-cli "/home/anson/workspace/hello-world/.pixi/envs/default/bin/mojo")
+
+;; 2) major mode —— 必须在最前面，别和下面的东西拆开
+(define-derived-mode mojo-mode python-mode "Mojo"
+  "Major mode for editing Mojo files."
+  (setq-local comment-start "# ")
+  (setq-local comment-end "")
+  (setq-local indent-tabs-mode nil)
+  (setq-local tab-width 4)
+  (font-lock-add-keywords
+   nil
+   '(("\\_<\\(fn\\|struct\\|trait\\|alias\\|var\\|comptime\\|raises\\|owned\\|borrowed\\|inout\\|async\\|await\\)\\_>"
+      0 font-lock-keyword-face)
+     ("\\_<\\(True\\|False\\|None\\|Self\\|self\\)\\_>" 0 font-lock-constant-face)
+     ("\\(@[a-zA-Z_][a-zA-Z0-9_]*\\)" 1 font-lock-preprocessor-face))
+   'append))
+
+(add-to-list 'auto-mode-alist '("\\.mojo\\'" . mojo-mode))
+
+;; 3) 格式化函数（定义放哪都行，被调用时存在即可）
+(defun my/mojo-format-buffer ()
+  "Run `mojo format' on the current file and refresh the buffer."
+  (interactive)
+  (let ((file (buffer-file-name))
+        (mojo (expand-file-name my/mojo-cli)))
+    (unless file (user-error "Buffer is not visiting a file"))
+    (unless (file-executable-p mojo) (user-error "mojo not found: %s" mojo))
+    (when (buffer-modified-p) (save-buffer))
+    (let* ((log (get-buffer-create "*mojo-format*"))
+           (code (progn (with-current-buffer log (erase-buffer))
+                        (call-process mojo nil log nil "format" file))))
+      (if (zerop code)
+          (progn (revert-buffer t t t) (message "mojo format: ok"))
+        (display-buffer log)
+        (message "mojo format failed (exit %s), see *mojo-format*" code)))))
+
+;; 4) 所有 buffer 级设置统一走 hook —— 顺序无关，永远不会 void
+(add-hook 'mojo-mode-hook
+          (lambda ()
+            (when (fboundp 'format-all-mode) (format-all-mode -1))
+            (when (fboundp 'eglot-ensure) (eglot-ensure))
+            (keymap-set mojo-mode-map "C-c C-f" #'my/mojo-format-buffer)))
+
+;; 5) eglot 注册（放 4 前面后面都无所谓）
+(require 'eglot)
+(setq eglot-server-programs
+      (cons `(mojo-mode ,(expand-file-name my/mojo-lsp-server))
+            (assq-delete-all 'mojo-mode eglot-server-programs)))
+(setq eglot-connect-timeout 60)
+(setq eglot-send-changes-idle-time 0)
+
+
 ;;; --------------------------------------------------------------------------
 ;;; 10. 文件树 / 终端
 ;;; --------------------------------------------------------------------------
