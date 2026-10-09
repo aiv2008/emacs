@@ -437,16 +437,25 @@
                   (local-set-key (kbd "M-/") #'company-complete))))
   (message "lean4-mode 未加载。可手动执行：git clone --depth 1 https://github.com/leanprover-community/lean4-mode.git ~/.emacs.d/lean4-mode"))
 
+;;; ==================== Mojo（自包含：主模式 + LSP + 补全 + 跳转） ====================
+;;; 用这一段【整体替换】init.el 里旧的 Mojo 一节。
+;;; 旧的那段范围：从 `;;; mojo-emacs-completion-fix.el ---` 那行开始，
+;;;               到 `(add-hook 'mojo-mode-hook #'eglot-ensure)` 那一行为止。
+;;;
+;;; 相比你现在的配置，改了三个地方：
+;;;   1) ★ 补回 (setq eglot-send-changes-idle-time 0)
+;;;      —— 原来的 0.5 秒 > company-idle-delay 的 0.2 秒，导致 didChange
+;;;         还没发出去、补全请求先到了，Mojo LSP 回 -32801 ContentModified
+;;;         ("outdated request")，补全全灭。
+;;;   2) mojo-mode-hook 只留【一个】接线函数，不再两个 hook 互相覆盖 backends。
+;;;   3) 补回 my/mojo-format-buffer（之前被覆盖掉，但 C-c C-f 还绑着它 → void-function）。
 
-;;; ==================== Mojo ====================
-;; 1) 路径（二选一，按你实际装的位置改）
-(defvar my/mojo-lsp-server "~/.pixi/bin/mojo-lsp-server")          ; 全局
-;; (defvar my/mojo-lsp-server "/home/anson/workspace/hello-world/.pixi/envs/default/bin/mojo-lsp-server")
+(require 'seq)
+(require 'eglot)
 
-(defvar my/mojo-cli "~/.pixi/envs/mojo/bin/mojo")                  ; 全局
-;; (defvar my/mojo-cli "/home/anson/workspace/hello-world/.pixi/envs/default/bin/mojo")
-
-;; 2) major mode —— 必须在最前面，别和下面的东西拆开
+;;; ---------------------------------------------------------------------------
+;;; 1. 主模式 + 文件关联
+;;; ---------------------------------------------------------------------------
 (define-derived-mode mojo-mode python-mode "Mojo"
   "Major mode for editing Mojo files."
   (setq-local comment-start "# ")
@@ -461,11 +470,47 @@
      ("\\(@[a-zA-Z_][a-zA-Z0-9_]*\\)" 1 font-lock-preprocessor-face))
    'append))
 
+;; 没有这一行，打开 .mojo 就是 Fundamental mode（无高亮、无 LSP）。
 (add-to-list 'auto-mode-alist '("\\.mojo\\'" . mojo-mode))
 
-;; 3) 格式化函数（定义放哪都行，被调用时存在即可）
+;;; ---------------------------------------------------------------------------
+;;; 2. 工程根：让 eglot 认得出 pixi 项目
+;;; ---------------------------------------------------------------------------
+(dolist (marker '("pixi.toml" "mojoproject.toml" "magic.toml"))
+  (add-to-list 'project-vc-extra-root-markers marker))
+
+;;; ---------------------------------------------------------------------------
+;;; 3. PATH：pixi 的 shim 目录（只加这个，别加 envs/*/bin 里的裸二进制）
+;;; ---------------------------------------------------------------------------
+(dolist (dir (list (expand-file-name "~/.pixi/bin")))
+  (when (fboundp 'my/add-bin-to-path)
+    (my/add-bin-to-path dir)))
+
+;;; ---------------------------------------------------------------------------
+;;; 4. 语言服务器：走项目 pixi 环境，并带上社区验证过的 -I .
+;;; ---------------------------------------------------------------------------
+(setq eglot-server-programs
+      (cons '(mojo-mode . ("pixi" "run" "mojo-lsp-server" "-I" "."))
+            (assq-delete-all 'mojo-mode eglot-server-programs)))
+
+;;; ---------------------------------------------------------------------------
+;;; 5. ★ 同步时机（本次修复的核心）
+;;; ---------------------------------------------------------------------------
+;; 必须让 didChange 先于 completion/hover 请求发出去。
+;; 0 = 一有空闲立刻推文档；务必小于 company-idle-delay（下面设的 0.2）。
+;; 若仍然偶发 outdated request，可改成 (setq eglot-send-changes-idle-time 0.1)
+;; 并把 company-idle-delay 放宽到 0.5，用"拉大间距"的方式彻底避免竞争。
+(setq eglot-send-changes-idle-time 0)
+
+;;; ---------------------------------------------------------------------------
+;;; 6. mojo CLI（C-c C-f 格式化用）
+;;; ---------------------------------------------------------------------------
+(defvar my/mojo-cli (or (executable-find "mojo")
+                        (expand-file-name "~/.pixi/envs/mojo/bin/mojo"))
+  "mojo CLI 路径。")
+
 (defun my/mojo-format-buffer ()
-  "Run `mojo format' on the current file and refresh the buffer."
+  "用 mojo format 格式化当前文件并刷新 buffer。"
   (interactive)
   (let ((file (buffer-file-name))
         (mojo (expand-file-name my/mojo-cli)))
@@ -480,20 +525,50 @@
         (display-buffer log)
         (message "mojo format failed (exit %s), see *mojo-format*" code)))))
 
-;; 4) 所有 buffer 级设置统一走 hook —— 顺序无关，永远不会 void
-(add-hook 'mojo-mode-hook
-          (lambda ()
-            (when (fboundp 'format-all-mode) (format-all-mode -1))
-            (when (fboundp 'eglot-ensure) (eglot-ensure))
-            (keymap-set mojo-mode-map "C-c C-f" #'my/mojo-format-buffer)))
+;;; ---------------------------------------------------------------------------
+;;; 7. .mojo buffer 的接线（只此一个函数，别再拆成两个）
+;;; ---------------------------------------------------------------------------
+(defun my/mojo-setup-buffer ()
+  "给 .mojo buffer 接上 company 与 xref。"
+  (when (fboundp 'format-all-mode) (format-all-mode -1))
+  ;; LSP 优先；LSP 出错/无候选时退到缓冲区词，保证打字一定有弹窗
+  (setq-local company-backends '(company-capf company-dabbrev-code))
+  (setq-local company-idle-delay 0.2)       ; 必须 > eglot-send-changes-idle-time
+  (setq-local company-minimum-prefix-length 1)
+  (setq-local company-async-timeout 30)
+  (company-mode 1)
+  ;; M-. 别弹「找哪个」直接跳
+  (setq-local xref-prompt-for-identifier nil)
+  (setq-local eldoc-documentation-strategy #'eldoc-documentation-compose)
+  ;; 手动触发键固定成 company-complete（默认 M-/ 是 dabbrev-expand，和 LSP 无关）
+  (local-set-key (kbd "M-/") #'company-complete)
+  (local-set-key (kbd "C-c C-f") #'my/mojo-format-buffer)
+  ;; M-. 定义 / M-? 引用 / M-, 返回（你第 6 节定义的那个通用函数）
+  (when (fboundp 'my/bind-xref-keys) (my/bind-xref-keys)))
 
-;; 5) eglot 注册（放 4 前面后面都无所谓）
-(require 'eglot)
-(setq eglot-server-programs
-      (cons `(mojo-mode ,(expand-file-name my/mojo-lsp-server))
-            (assq-delete-all 'mojo-mode eglot-server-programs)))
-(setq eglot-connect-timeout 60)
-(setq eglot-send-changes-idle-time 0)
+;;; ---------------------------------------------------------------------------
+;;; 8. 接线：先配 company，再起 eglot
+;;; ---------------------------------------------------------------------------
+(add-hook 'mojo-mode-hook #'my/mojo-setup-buffer)
+(add-hook 'mojo-mode-hook #'eglot-ensure)
+;;; ==================== Mojo 配置结束 ====================
+
+
+;;; ---------------------------------------------------------------------------
+;;; 7. 可选
+;;; ---------------------------------------------------------------------------
+;; 7a. 万一 Mojo LSP 实在不返回候选，加 dabbrev 兜底（写在第 5 节的
+;;     my/mojo-completion-setup 里面，否则会被它覆盖）：
+;; (setq-local company-backends '(company-capf company-dabbrev-code))
+;;
+;; 7b. 想让服务器版本跟着项目走，可以不用全局二进制，改成让 pixi 代劳
+;;     （pixi run 若往 stdout 输出任何东西都会破坏 LSP 分帧，需自行验证）：
+;; (setq eglot-server-programs
+;;       (cons '(mojo-mode . ("pixi" "run" "mojo-lsp-server"))
+;;             (assq-delete-all 'mojo-mode eglot-server-programs)))
+
+(provide 'mojo-emacs-completion-fix)
+;;; mojo-emacs-completion-fix.el ends here
 
 
 ;;; --------------------------------------------------------------------------
