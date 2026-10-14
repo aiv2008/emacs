@@ -334,26 +334,23 @@
 
 ;;; --------------------------------------------------------------------------
 ;;; 9b. Python（eglot）
-;;; 为什么 .py 里既跳不动也没补全：
-;;;   ① 这份配置从来没给 python 挂过 eglot。上面 use-package eglot 的 :hook
-;;;      只有 js / ts / tsx / lean4，后面 solidity、mojo 各自单开了一节，
-;;;      python 一节都没有。没有 eglot 连接 ⇒ xref 没有 backend（M-. 不动）
-;;;      + company 没有 capf 后端（没补全）—— 和装没装 pyqpanda3 无关，
-;;;      任何第三方包都跳不进去。
-;;;   ② 这台机器上一个 Python 语言服务器都没装。Emacs 31 的 eglot 其实已经
-;;;      内置了 python-mode / python-ts-mode 的候选，不需要再注册
-;;;      eglot-server-programs：
+;;; 为什么 .py 里既跳不动也没补全（以及怎么修）：
+;;;   ① python 必须挂 eglot。上面 use-package eglot 的 :hook 只有 js / ts / tsx /
+;;;      lean4；没有 eglot 连接 ⇒ xref 没 backend（M-. 不动）+ company 没 capf
+;;;      后端（没补全）。所以下面几行 add-hook 是必需的。
+;;;   ② 语言服务器不在仓库里，要自己装。Emacs 31 的 eglot 已内置 python-mode /
+;;;      python-ts-mode 的候选，不用再注册 eglot-server-programs：
 ;;;        rass / pylsp / pyls / basedpyright-langserver / pyright-langserver /
 ;;;        pyrefly / ty / jedi-language-server / ruff / ruff-lsp
-;;;      所以在 .py 里手动 M-x eglot 只会报
-;;;      "None of '...' are valid executables"。
-;;; 装一个即可（装完重启 Emacs，下面两行 hook 就生效）：
-;;;   npm i -g basedpyright          ; 静态分析，跳转/补全最全（推荐）
-;;;   pip install python-lsp-server  ; 提供 pylsp，靠运行时 introspect
-;;; 另外：服务器必须用「装了 pyqpanda3 的那个解释器」才能解析 import。
-;;; 工程里有 .venv 会被自动认出来；装在 conda / pixi / 全局的，在工程根写
-;;; pyrightconfig.json：
-;;;   { "venvPath": "C:/Users/anson/.pixi/envs", "venv": "default" }
+;;;      推荐把 pylsp 装进「项目自己的 venv」—— 它用 jedi 做运行时内省，
+;;;      对 pyqpanda3 这种 pybind11 编译扩展比纯静态的 pyright 更管用：
+;;;        python -m venv .venv
+;;;        .venv\Scripts\pip install python-lsp-server
+;;;   ③ 编译扩展的 stub 是空壳：pyqpanda3 的 <子包>\__init__.pyi 只写了 __all__，
+;;;      真正的签名在同目录 <子包>.pyi，运行时才被动态注入 —— 静态分析器看不见，
+;;;      于是 core.H / core.QProg 既补不出也跳不进。每个环境打一次补丁：
+;;;        pwsh -File ~/.emacs.d/scripts/fix-pyqpanda3-stubs.ps1
+;;; 换新电脑的完整清单见 README.md「换新电脑：环境清单」一节。
 ;;; --------------------------------------------------------------------------
 ;; MS Store 版 Python 把 pip 装的命令行工具丢在
 ;;   %LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.3.*\
@@ -370,6 +367,32 @@
                    localappdata)))
       (my/add-bin-to-path dir))))
 
+;; venv 里的 pylsp 靠 exec-path 才能被 eglot 找到，而图形界面 Emacs 的 PATH
+;; 里通常没有 venv。这里补两处：~/.emacs.d/*-env/Scripts（本机惯例）和当前
+;; 工程的 .venv/Scripts。hook 按注册顺序跑，所以先补 PATH 再 eglot-ensure。
+(dolist (dir (file-expand-wildcards
+              (expand-file-name "*-env/Scripts" user-emacs-directory)))
+  (my/add-bin-to-path dir))
+
+(defun my/python-venv-path ()
+  "把最近的 .venv/Scripts 补进 exec-path。
+从工程根（拿不到就用 default-directory）逐级向上找 —— .py 在 src/ 里时，
+.venv 通常还在上一层。"
+  (let* ((proj (and (fboundp 'project-current) (project-current nil)))
+         (dir (file-name-as-directory (or (and proj (project-root proj))
+                                          default-directory)))
+         (found nil)
+         (hops 0))
+    (while (and (not found) dir (< hops 8))
+      (setq hops (1+ hops))
+      (let ((venv (expand-file-name ".venv/Scripts" dir)))
+        (if (file-directory-p venv)
+            (setq found venv)
+          (setq dir (file-name-parent-directory (directory-file-name dir))))))
+    (when found (my/add-bin-to-path found))))
+
+(add-hook 'python-mode-hook #'my/python-venv-path)
+(add-hook 'python-ts-mode-hook #'my/python-venv-path)
 (add-hook 'python-mode-hook #'eglot-ensure)
 (add-hook 'python-ts-mode-hook #'eglot-ensure)
 

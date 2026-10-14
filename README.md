@@ -108,3 +108,59 @@ Claude Code 使用本机 `claude` CLI（需已登录）。
 | `C-u C-c RET` | gptel 选模型 / 后端 |
 
 终端里 `C-c RET` 等价于 `C-c C-m`。
+
+## 换新电脑：环境清单
+
+配置 clone 下来就能用，**语言服务器不在仓库里，要另外装**。装完重启 Emacs 即可，不用改配置。
+
+| 语言 | 装什么 | 命令 |
+|---|---|---|
+| TS / JS / Vue 2 | typescript-language-server + Volar 2.2.x | `npm i -g typescript-language-server @vue/language-server@2.2.10 typescript` |
+| Solidity | Nomic 官方 server（**必须带 `--stdio`**，init.el 里已写好） | `npm i -g @nomicfoundation/solidity-language-server` |
+| Python | `pylsp`（jedi 后端） | 见下 |
+| Lean 4 | `lake serve`（elan 装的 lean 自带） | init.el 会自动 clone `lean4-mode` |
+| Mojo | `mojo-lsp-server`（pixi） | 改 init.el 里的 `my/mojo-lsp-server` 路径 |
+| C / C++ | clangd（可选） | 自行安装 |
+
+### Python：三件事
+
+**1. 一个项目一个 venv，且语言服务器装进同一个 venv**
+
+```powershell
+python -m venv D:\workspace\myproj\.venv
+D:\workspace\myproj\.venv\Scripts\pip install python-lsp-server pyqpanda3
+```
+
+> 为什么反复强调"同一个解释器"：pylsp/jedi 只能解析**它自己那台解释器** site-packages 里的包。
+> 服务器和 pyqpanda3 不在同一个环境里，症状就是"能跳到包根 `pyqpanda3\__init__.py`，
+> 但 `core.H` / `core.QProg` 既补不出也跳不进"。
+> 也**别在同一台机器上重复建好几个装 pyqpanda3 的 venv** —— 排查时很难判断 LSP 用的是哪个。
+
+**2. 让 Emacs 找得到 `pylsp`**
+
+`init.el`（9b 节）已经会自动扫两处：`~/.emacs.d/*-env/Scripts` 和工程里的 `.venv/Scripts`。
+venv 建在别处的话，把它的 `Scripts` 目录加进用户 PATH，或直接在配置里注册该路径。
+
+**3. 给 pyqpanda3 打 stub 补丁（每个新环境、每次升级后都要）**
+
+```powershell
+pwsh -File ~/.emacs.d/scripts/fix-pyqpanda3-stubs.ps1
+```
+
+原因：pyqpanda3 的编译扩展（`.pyd`）只有运行时才知道有哪些符号 —— 靠
+`_extension_loader.export_public_symbols()` 动态往 `globals()` 里塞；它自带的包级
+`__init__.pyi` 只写了 `__all__` 加一句 "no definition"，真正的签名在同目录 `core.pyi`（19176 行）里。
+静态分析器优先读 `.pyi`，于是看到空壳 → `core.H` 找不到。
+
+脚本做的事：给 7 个子包的 `__init__.pyi` 补一行 `from .X import *`（外加 `core\__init__.py`，运行时等价）。
+幂等、可重复执行，原文件备份成 `.pystub-orig`。**`pip install -U pyqpanda3` 会覆盖，升级后重跑一次。**
+
+`pyqpanda3.utils` 没提供任何 `.pyi`，`utils.*` 的静态补全无解；`visualization` / `profiling` /
+`pilot_os` 是纯 Python，本来就正常。
+
+### 自检三步
+
+1. 打开 `.py`，模式行出现 `[eglot:工程名]` → 服务器连上了
+2. `M-.` 跳定义、`M-?` 找引用、`M-,` 跳回来
+3. 连不上时：`M-x mvue-events` 看 LSP 收发日志（第一行 `Running language server: ...` 就是它在用谁），
+   `M-x eglot` 手动重连，`M-x list-processes` 看语言服务器进程的完整路径/解释器
