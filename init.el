@@ -333,6 +333,47 @@
               (setq-local company-backends '(company-capf)))))
 
 ;;; --------------------------------------------------------------------------
+;;; 9b. Python（eglot）
+;;; 为什么 .py 里既跳不动也没补全：
+;;;   ① 这份配置从来没给 python 挂过 eglot。上面 use-package eglot 的 :hook
+;;;      只有 js / ts / tsx / lean4，后面 solidity、mojo 各自单开了一节，
+;;;      python 一节都没有。没有 eglot 连接 ⇒ xref 没有 backend（M-. 不动）
+;;;      + company 没有 capf 后端（没补全）—— 和装没装 pyqpanda3 无关，
+;;;      任何第三方包都跳不进去。
+;;;   ② 这台机器上一个 Python 语言服务器都没装。Emacs 31 的 eglot 其实已经
+;;;      内置了 python-mode / python-ts-mode 的候选，不需要再注册
+;;;      eglot-server-programs：
+;;;        rass / pylsp / pyls / basedpyright-langserver / pyright-langserver /
+;;;        pyrefly / ty / jedi-language-server / ruff / ruff-lsp
+;;;      所以在 .py 里手动 M-x eglot 只会报
+;;;      "None of '...' are valid executables"。
+;;; 装一个即可（装完重启 Emacs，下面两行 hook 就生效）：
+;;;   npm i -g basedpyright          ; 静态分析，跳转/补全最全（推荐）
+;;;   pip install python-lsp-server  ; 提供 pylsp，靠运行时 introspect
+;;; 另外：服务器必须用「装了 pyqpanda3 的那个解释器」才能解析 import。
+;;; 工程里有 .venv 会被自动认出来；装在 conda / pixi / 全局的，在工程根写
+;;; pyrightconfig.json：
+;;;   { "venvPath": "C:/Users/anson/.pixi/envs", "venv": "default" }
+;;; --------------------------------------------------------------------------
+;; MS Store 版 Python 把 pip 装的命令行工具丢在
+;;   %LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.3.*\
+;;     LocalCache\local-packages\Python3*\Scripts
+;; （本机是 Python 3.13，pyqpanda3 也装在这个解释器里）。这个目录虽然会进
+;; 用户 PATH，但 GUI Emacs 拿到的是"启动那一刻"的 PATH，而且路径带版本号，
+;; 所以这里显式扫一遍补进 exec-path —— pylsp 就落在这儿。
+(when (eq system-type 'windows-nt)
+  (when-let* ((localappdata (getenv "LOCALAPPDATA")))
+    (dolist (dir (file-expand-wildcards
+                  (expand-file-name
+                   (concat "Packages/PythonSoftwareFoundation.Python.3.*/"
+                           "LocalCache/local-packages/Python3*/Scripts")
+                   localappdata)))
+      (my/add-bin-to-path dir))))
+
+(add-hook 'python-mode-hook #'eglot-ensure)
+(add-hook 'python-ts-mode-hook #'eglot-ensure)
+
+;;; --------------------------------------------------------------------------
 ;;; 9. Lean 4
 ;;; --------------------------------------------------------------------------
 ;; lean4-mode 不在 MELPA，需要克隆到 ~/.emacs.d/lean4-mode。
