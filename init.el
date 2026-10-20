@@ -72,9 +72,21 @@
     (setq mac-option-modifier 'meta
           mac-command-modifier 'super)))
 
-(use-package dracula-theme
+;; (use-package draculatheme
+;;   :config
+;;   (load-theme 'dracula t))
+
+;; 主题：换主题改 my/theme 一行即可；可用名字用 M-x customize-themes 看
+(setq my/theme 'catppuccin)          ; 例：'modus-vivendi、'ef-dark、'doom-one
+(unless (eq my/theme 'modus-vivendi) ; modus-* 是内置的，不用装
+  (use-package catppuccin-theme :ensure t :defer t))
+(load-theme my/theme t)              ; t = 以后别每次问
+
+(use-package catppuccin-theme
+  :ensure t
   :config
-  (load-theme 'dracula t))
+  (setq catppuccin-flavor 'frappe) ; mocha / macchiato / frappe / latte
+  (load-theme 'catppuccin t))
 
 ;; 仅图形界面生效。GTK/WSL 必须用 "Family-SIZE"，只改 :height 不会变。
 (setq my/font-family "Maple Mono NF"
@@ -869,12 +881,13 @@
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  '(package-selected-packages
-   '(comment-dwim-2 company dracula-theme exec-path-from-shell exwm
-                    format-all git-gutter gptel lsp-mode magit
-                    marginalia orderless pyim pyim-basedict
-                    rainbow-delimiters solidity-mode
-                    treemacs-nerd-icons typescript-mode vertico vterm
-                    web-mode xr)))
+   '(catppuccin-theme catppuccin-theme comment-dwim-2 company
+                      exec-path-from-shell exwm format-all git-gutter
+                      gptel lsp-mode magit marginalia orderless
+                      org-inline-pdf pyim pyim-basedict
+                      rainbow-delimiters rg solidity-mode
+                      treemacs-nerd-icons typescript-mode vertico
+                      vterm web-mode xr)))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
@@ -1482,3 +1495,13 @@ Volar 的 definition 是一跳一跳给的（模板标签 → script 里 `compon
 ;; 注意：major mode 不会 provide feature，所以这里直接 keymap-set，
 ;; 不要用 with-eval-after-load（那样子永远不会执行）。
 (keymap-set vue2-web-mode-map "C-c v" mvue-command-map)
+
+
+;;; --------------------------------------------------------------------------
+;;; 8. 加入rg搜索配置
+;;; --------------------------------------------------------------------------
+(use-package rg
+  :ensure t
+  :config
+  ;; 调用系统rg，scoop装的rg自动在PATH，直接识别
+  )
