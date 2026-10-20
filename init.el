@@ -1504,4 +1504,21 @@ Volar 的 definition 是一跳一跳给的（模板标签 → script 里 `compon
   :ensure t
   :config
   ;; 调用系统rg，scoop装的rg自动在PATH，直接识别
+
+  ;; Windows 专用：命令行参数必须按系统 ANSI 代码页（本机 936/GBK）编码。
+  ;; 否则中文关键字会被 cmdproxy 丢弃——缓冲区里会出现
+  ;; "warning: extra args ignored after ..."，rg 实际搜不到东西、退出码 1，
+  ;; 于是编译框架报 "rg exited abnormally with code 1"。
+  (when (eq system-type 'windows-nt)
+    (defun my/rg-ansi-command-line (fn &rest args)
+      "Bind `coding-system-for-write' to the ANSI codepage around rg."
+      (let ((coding-system-for-write
+             (coding-system-change-eol-conversion
+              (intern (format "cp%d" (if (boundp 'w32-ansi-code-page)
+                                         w32-ansi-code-page
+                                       936)))
+              'dos)))
+        (apply fn args)))
+    (advice-add 'rg-run :around #'my/rg-ansi-command-line)
+    (advice-add 'rg-recompile :around #'my/rg-ansi-command-line))
   )
