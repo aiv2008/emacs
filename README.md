@@ -50,13 +50,22 @@ export CODERELAY_API_KEY="sk-..."    # 写进 ~/.zshrc 后重新开终端
 | `Tab` | 确认补全 |
 | `M-/` | 手动弹出补全（Lean） |
 
-### 跳转（TS / JS / TSX / Lean）
+### 跳转（TS / JS / TSX / Vue / Python / Rust / Lean）
 
 | 键 | 作用 |
 |---|---|
-| `M-.` | 跳到定义 |
+| `M-.` | 跳到定义（Rust 里连标准库源码一起跳，需 `rust-src`） |
 | `M-?` | 查找引用 |
 | `M-,` | 跳回上一处 |
+
+### Rust
+
+| 键 | 作用 |
+|---|---|
+| `M-.` / `M-?` / `M-,` | 定义 / 引用 / 跳回 |
+| `C-c r d` | 环境自检（`my/rust-doctor`：工具链、服务器、主模式、工程根） |
+| `C-c r r` | 重启 rust-analyzer（改过 `Cargo.toml` 就用它） |
+| `C-c r c` | 在工程根跑 `cargo check` |
 
 ### Lean 4
 
@@ -119,6 +128,7 @@ Claude Code 使用本机 `claude` CLI（需已登录）。
 | Solidity | Nomic 官方 server（**必须带 `--stdio`**，init.el 里已写好） | `npm i -g @nomicfoundation/solidity-language-server` |
 | Python | `pylsp`（jedi 后端） | 见下 |
 | Lean 4 | `lake serve`（elan 装的 lean 自带） | init.el 会自动 clone `lean4-mode` |
+| Rust | rust-analyzer + rust-src（都是 rustup 组件） | `rustup component add rust-analyzer rust-src` |
 | Mojo | `mojo-lsp-server`（pixi） | 改 init.el 里的 `my/mojo-lsp-server` 路径 |
 | C / C++ | clangd（可选） | 自行安装 |
 
@@ -157,6 +167,36 @@ pwsh -File ~/.emacs.d/scripts/fix-pyqpanda3-stubs.ps1
 
 `pyqpanda3.utils` 没提供任何 `.pyi`，`utils.*` 的静态补全无解；`visualization` / `profiling` /
 `pilot_os` 是纯 Python，本来就正常。
+
+### Rust：两件事
+
+**1. 装 rust-analyzer 和 rust-src**
+
+```powershell
+rustup component add rust-analyzer   # 语言服务器
+rustup component add rust-src        # 想 M-. 跳进标准库源码才需要
+```
+
+`~/.cargo/bin/rust-analyzer.exe` 只是 rustup 的**代理**，组件没装时它会直接报
+`error: Unknown binary 'rust-analyzer.exe' in official toolchain`。
+`rustup component add` 卡在 `static.rust-lang.org` 上时换镜像：
+
+```powershell
+$env:RUSTUP_DIST_SERVER = "https://rsproxy.cn"
+rustup component add rust-analyzer rust-src
+```
+
+**2. 主模式别停在 fundamental-mode**
+
+Emacs 31 把 `.rs` 指向 `rust-ts-mode-maybe`：没有 tree-sitter 的 rust 语法时它
+**静默退回 fundamental-mode**，于是既没高亮也没有 eglot（eglot 只认
+`rust-mode` / `rust-ts-mode`），补全和跳转全无。`init.el` 的 9c 节按下面顺序兜底：
+
+- 有语法 → `rust-ts-mode`（想要语法树：`M-x treesit-install-language-grammar RET rust RET`，需要 git + MSVC 的 `cl.exe`）
+- 没语法 → MELPA 的 `rust-mode`（纯 elisp，配置里 `:ensure t` 自动装）
+- 都没有 → `fundamental-mode` + 一条提示消息
+
+看一眼当前状态：`M-x my/rust-doctor`（`C-c r d`）。
 
 ### 自检三步
 

@@ -44,10 +44,13 @@
   :config
   (exec-path-from-shell-initialize))
 
-;; Linux / macOS 共用：elan、用户本地 bin、nvm 的 node。
+;; 三平台共用：elan、cargo（rust-analyzer / rustfmt / clippy-driver）、用户本地 bin、
+;; nvm 的 node。~/.cargo/bin 里那几个是 rustup 的代理程序，真正的二进制在
+;; ~/.rustup/toolchains/<toolchain>/bin —— 代理必须能被找到，见「9c. Rust」。
 (mapc #'my/add-bin-to-path
       (append
        (list (expand-file-name "~/.elan/bin")
+             (expand-file-name "~/.cargo/bin")
              (expand-file-name "~/.local/bin"))
        (file-expand-wildcards
         (expand-file-name "~/.nvm/versions/node/*/bin"))))
@@ -407,6 +410,177 @@
 (add-hook 'python-ts-mode-hook #'my/python-venv-path)
 (add-hook 'python-mode-hook #'eglot-ensure)
 (add-hook 'python-ts-mode-hook #'eglot-ensure)
+
+;;; --------------------------------------------------------------------------
+;;; 9c. Rust（eglot + rust-analyzer）：补全 / 跳转 / 诊断
+;;; 打开 .rs 既没补全、M-. 也跳不动，通常是下面三件事之一，本机 ①② 都踩过：
+;;;   ① 主模式根本不对。Emacs 31 把 .rs 指向 rust-ts-mode-maybe：没有 tree-sitter
+;;;      的 rust 语法时它【静默退回 fundamental-mode】—— 既没高亮，也没有 eglot
+;;;      （eglot 只认 rust-mode / rust-ts-mode 这两个模式），补全和跳转自然全无。
+;;;      本机就是这种情况：M-x treesit-language-available-p RET rust RET ⇒ nil。
+;;;      两条路这里都接好了，装了哪条用哪条：
+;;;        a) 内置 rust-ts-mode（推荐，高亮/缩进靠语法树更准）——先装语法：
+;;;             M-x treesit-install-language-grammar RET rust RET
+;;;           要 git + cc（即 MSVC 的 cl.exe）；也可以手动把预编译的
+;;;           libtree-sitter-rust.dll 放进 ~/.emacs.d/tree-sitter/。
+;;;        b) MELPA 的 rust-mode（纯 elisp，不依赖 tree-sitter，首次启动自动装）。
+;;;   ② rust-analyzer 没装。~/.cargo/bin/rust-analyzer.exe 只是 rustup 的代理，
+;;;      组件缺失时它自己会报
+;;;        error: Unknown binary 'rust-analyzer.exe' in official toolchain
+;;;      装上（国内网络常在 static.rust-lang.org 卡住，可换镜像）：
+;;;        rustup component add rust-analyzer
+;;;        $env:RUSTUP_DIST_SERVER="https://rsproxy.cn"; rustup component add rust-analyzer
+;;;      想 M-. 跳进标准库源码，再加一个 rustup component add rust-src。
+;;;   ③ 没有 eglot 连接 ⇒ xref 没 backend（M-. 不动）+ company 没 capf（不补全）。
+;;;      所以下面 mode-hook 里的 eglot-ensure 是必需的；服务器映射 eglot 已内置
+;;;      ((rust-ts-mode rust-mode) . ("rust-analyzer"))，不用再 add-to-list。
+;;; 自检：M-x my/rust-doctor      看 LSP 收发日志：M-x eglot-events-buffer
+;;; --------------------------------------------------------------------------
+(defun my/rust-ts-available-p ()
+  "本机能否使用 tree-sitter 的 rust 语法（决定 rust-ts-mode 还是 rust-mode）。"
+  (and (require 'treesit nil t)
+       (treesit-available-p)
+       (treesit-language-available-p 'rust)))
+
+;; ① 兜底主模式：纯 elisp，不需要 tree-sitter。有语法时用不上它。
+(use-package rust-mode
+  :ensure t
+  :defer t
+  :if (not (my/rust-ts-available-p)))
+
+(defun my/rust-auto-mode ()
+  "为 .rs 选一个「能用且 eglot 认识」的主模式，绝不停在 fundamental-mode。"
+  (cond
+   ((my/rust-ts-available-p) (rust-ts-mode))
+   ((fboundp 'rust-mode) (rust-mode))
+   (t (fundamental-mode)
+      (message "Rust: 既没有 tree-sitter 的 rust 语法，也没装 rust-mode，\
+补全/跳转不可用。装语法：M-x treesit-install-language-grammar RET rust RET"))))
+
+;; 盖掉 Emacs 31 自带的 ("\\.rs\\'" . rust-ts-mode-maybe)：它没有语法时直接退回
+;; fundamental-mode，eglot 找不到服务器，功能全无。add-to-list 会抢在最前面。
+(add-to-list 'auto-mode-alist '("\\.rs\\'" . my/rust-auto-mode))
+
+(defun my/rust-setup-buffer ()
+  "让 .rs buffer 用好 eglot：eldoc 组合信息 + 缩进。
+★ 内联类型提示不用在这儿开：eglot 在连上服务器的同时（`eglot--maybe-activate-
+editing-mode'）自己会开 `eglot-inlay-hints-mode'。提前在这里开会在没连接的
+buffer 上抛 \"No current JSON-RPC connection\"，并且把后面的 eglot-ensure 一起
+带崩 —— 症状就是打开 .rs 既没连上也没补全（本机实测踩过）。"
+  ;; 光标停一下就能看到 类型 / 函数签名（eglot 的 hover）。
+  (setq-local eldoc-documentation-strategy #'eldoc-documentation-compose)
+  (setq-local indent-tabs-mode nil))
+
+;; 服务器端配置。★ 坑：eglot 是在【临时 buffer】里读 eglot-workspace-configuration
+;; 的（default-directory 设成工程根，再套 .dir-locals.el），所以在这个 .rs buffer
+;; 里 setq-local 完全无效 —— 只能设全局值，或者写进工程的 .dir-locals.el。
+;; keyword 会被 eglot 转成 camelCase 键名发给服务器；函数值收到 server 对象。
+(defun my/rust-workspace-configuration (server)
+  "rust-analyzer 的服务器端配置；其它语言服务器返回 nil（等于什么都没配）。"
+  (when (seq-some (lambda (m) (memq m '(rust-mode rust-ts-mode)))
+                  (ignore-errors (eglot--major-modes server)))
+    '(:rust-analyzer
+      (:check (:command "clippy")        ; 保存后跑 clippy（组件已装）
+       :cargo (:allFeatures t)           ; 别按 features 裁剪，否则 cfg 掉代码
+       :procMacro (:enable t)            ; 让 derive/serde 这类宏能展开
+       :imports (:granularity "module")  ; 自动 import 写成 use x::y，不必全路径
+       :inlayHints (:typeHints (:enable t))))))
+
+(setq-default eglot-workspace-configuration #'my/rust-workspace-configuration)
+
+;; 三条 hook 的先后无所谓：`eglot-ensure' 只登记一个 post-command-hook，真正的
+;; 连接发生在当前命令结束之后（所以上面 buffer 里的设置一定先就位）。
+(dolist (hook '(rust-mode-hook rust-ts-mode-hook))
+  (add-hook hook #'my/rust-setup-buffer)
+  (add-hook hook #'my/bind-xref-keys)   ; M-. 定义 / M-? 引用 / M-, 返回
+  (add-hook hook #'eglot-ensure))
+
+(defun my/rust-project-root ()
+  "当前 Rust 工程根目录：优先 project.el，其次往上找 Cargo.toml。
+（eglot 的 rootUri 也取自 project.el；不加 project-vc-extra-root-markers 时
+就是 git 根，cargo workspace 正好；非 git 的单 crate 由 Cargo.toml 兜底。）"
+  (or (ignore-errors (project-root (project-current)))
+      (locate-dominating-file default-directory "Cargo.toml")))
+
+(defun my/rust-cargo-check ()
+  "在工程根跑 cargo check（看编译错误比 clippy 快）。"
+  (interactive)
+  (let ((default-directory
+         (file-name-as-directory (or (my/rust-project-root) default-directory))))
+    (compile "cargo check --message-format=short")))
+
+(defun my/rust-restart-server ()
+  "重启当前工程的 rust-analyzer（改过 Cargo.toml / 加完依赖用它）。"
+  (interactive)
+  (if-let* ((server (eglot-current-server)))
+      (progn (eglot-shutdown server) (eglot-ensure))
+    (eglot-ensure)))
+
+(defun my/rust--tool-version (program)
+  "返回 PROGRAM --version 的首行；没装、或 rustup 代理缺组件时返回提示。
+（`call-process' 的 DESTINATION 为 t 时 stdout 与 stderr 一起收进 buffer，
+ rustup 代理的报错正是写在 stderr 上的。）"
+  (let ((exe (executable-find program)))
+    (cond
+     ((null exe)
+      (format "❌ 找不到（~/.cargo/bin 没进 exec-path？）"))
+     (t
+      (let ((out (string-trim
+                  (or (ignore-errors
+                        (with-temp-buffer
+                          (call-process exe nil t nil "--version")
+                          (buffer-string)))
+                      ""))))
+        (cond
+         ((string-empty-p out) "❌ 跑不起来")
+         ((string-match-p "Unknown binary" out)
+          (format "❌ rustup 代理里没有这个组件，执行：rustup component add %s"
+                  program))
+         (t (car (split-string out "\n")))))))))
+
+(defun my/rust-doctor ()
+  "Rust + eglot 环境自检：工具链、语言服务器、主模式、工程根。"
+  (interactive)
+  (let* ((root (my/rust-project-root))
+         (lines
+          (list
+           (format "Emacs: %s / eglot: %s" emacs-version
+                   (or (ignore-errors (file-name-directory (locate-library "eglot")))
+                       "内置"))
+           (format "rustc: %s" (my/rust--tool-version "rustc"))
+           (format "cargo: %s" (my/rust--tool-version "cargo"))
+           (format "rustfmt: %s" (my/rust--tool-version "rustfmt"))
+           (format "rust-analyzer: %s" (my/rust--tool-version "rust-analyzer"))
+           (format "tree-sitter rust 语法: %s"
+                   (if (my/rust-ts-available-p)
+                       "✅ 有（用 rust-ts-mode）"
+                     "❌ 没有（已退回 rust-mode；要语法树就 M-x treesit-install-language-grammar RET rust RET）"))
+           (format "工程根: %s" (if root
+                                   (abbreviate-file-name root)
+                                 "❌ 没找到（eglot 会用文件所在目录）"))
+           (format "Cargo.toml: %s"
+                   (or (locate-dominating-file default-directory "Cargo.toml")
+                       "❌ 上方没找到"))
+           (format "当前 buffer: %s / %s / eglot=%s"
+                   (buffer-name) major-mode
+                   (if (eglot-current-server) "已连接" "未连接")))))
+    (with-output-to-temp-buffer "*rust-doctor*"
+      (princ "Rust + eglot 环境自检\n────────────────────\n")
+      (dolist (line lines) (princ (concat line "\n"))))
+    (with-current-buffer "*rust-doctor*" (special-mode))))
+
+(defvar-keymap my/rust-command-map
+  :doc "Rust 辅助命令"
+  "d" #'my/rust-doctor
+  "r" #'my/rust-restart-server
+  "c" #'my/rust-cargo-check)
+
+;; rust-ts-mode / rust-mode 都自带 keymap，但只有真加载了才有 —— 所以用
+;; with-eval-after-load，别在 init 里直接 keymap-set（会抢先 defvar 掉空表）。
+(with-eval-after-load 'rust-ts-mode
+  (keymap-set rust-ts-mode-map "C-c r" my/rust-command-map))
+(with-eval-after-load 'rust-mode
+  (keymap-set rust-mode-map "C-c r" my/rust-command-map))
 
 ;;; --------------------------------------------------------------------------
 ;;; 9. Lean 4
