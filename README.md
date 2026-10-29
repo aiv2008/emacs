@@ -63,9 +63,10 @@ export CODERELAY_API_KEY="sk-..."    # 写进 ~/.zshrc 后重新开终端
 | 键 | 作用 |
 |---|---|
 | `M-.` / `M-?` / `M-,` | 定义 / 引用 / 跳回 |
-| `C-c r d` | 环境自检（`my/rust-doctor`：工具链、服务器、主模式、工程根） |
-| `C-c r r` | 重启 rust-analyzer（改过 `Cargo.toml` 就用它） |
+| `C-c r d` | 环境自检（`my/rust-doctor`：工具链、服务器、主模式、工程根、crate、analyzer 状态） |
+| `C-c r r` | 重启 rust-analyzer（改过 `Cargo.toml` / 加完依赖就用它） |
 | `C-c r c` | 在工程根跑 `cargo check` |
+| `C-c r e` | 打开 LSP 收发日志（排障看 `failed to find any projects` / `Failed to load workspaces`） |
 
 ### Lean 4
 

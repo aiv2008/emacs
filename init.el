@@ -411,119 +411,165 @@
 (add-hook 'python-mode-hook #'eglot-ensure)
 (add-hook 'python-ts-mode-hook #'eglot-ensure)
 
-;;; --------------------------------------------------------------------------
+;;; -----------------------------------------------------------------------
+
+;;; ---------------------------------------------------------------------------
 ;;; 9c. Rust（eglot + rust-analyzer）：补全 / 跳转 / 诊断
-;;; 打开 .rs 既没补全、M-. 也跳不动，通常是下面三件事之一，本机 ①② 都踩过：
-;;;   ① 主模式根本不对。Emacs 31 把 .rs 指向 rust-ts-mode-maybe：没有 tree-sitter
-;;;      的 rust 语法时它【静默退回 fundamental-mode】—— 既没高亮，也没有 eglot
-;;;      （eglot 只认 rust-mode / rust-ts-mode 这两个模式），补全和跳转自然全无。
-;;;      本机就是这种情况：M-x treesit-language-available-p RET rust RET ⇒ nil。
-;;;      两条路这里都接好了，装了哪条用哪条：
-;;;        a) 内置 rust-ts-mode（推荐，高亮/缩进靠语法树更准）——先装语法：
-;;;             M-x treesit-install-language-grammar RET rust RET
-;;;           要 git + cc（即 MSVC 的 cl.exe）；也可以手动把预编译的
-;;;           libtree-sitter-rust.dll 放进 ~/.emacs.d/tree-sitter/。
-;;;        b) MELPA 的 rust-mode（纯 elisp，不依赖 tree-sitter，首次启动自动装）。
-;;;   ② rust-analyzer 没装。~/.cargo/bin/rust-analyzer.exe 只是 rustup 的代理，
-;;;      组件缺失时它自己会报
-;;;        error: Unknown binary 'rust-analyzer.exe' in official toolchain
-;;;      装上（国内网络常在 static.rust-lang.org 卡住，可换镜像）：
-;;;        rustup component add rust-analyzer
-;;;        $env:RUSTUP_DIST_SERVER="https://rsproxy.cn"; rustup component add rust-analyzer
-;;;      想 M-. 跳进标准库源码，再加一个 rustup component add rust-src。
-;;;   ③ 没有 eglot 连接 ⇒ xref 没 backend（M-. 不动）+ company 没 capf（不补全）。
-;;;      所以下面 mode-hook 里的 eglot-ensure 是必需的；服务器映射 eglot 已内置
-;;;      ((rust-ts-mode rust-mode) . ("rust-analyzer"))，不用再 add-to-list。
-;;; 自检：M-x my/rust-doctor      看 LSP 收发日志：M-x eglot-events-buffer
-;;; --------------------------------------------------------------------------
+;;; 打开 .rs 既没补全、M-. 也跳不动，基本是下面四件事之一（①②③ 本机都实测踩过）：
+;;;   ① 【最常见的元凶】没有 eglot 连接。没有连接 ⇒ xref 没 backend（M-. 不动）
+;;;      + company 没 capf（不补全）。所以第 3 节 dolist 里那条 eglot-ensure 是
+;;;      必需的 —— 少了它，整节配置等于没开 Rust LSP。
+;;;   ② 主模式不对。Emacs 31 把 .rs 指向 rust-ts-mode-maybe：没有 tree-sitter 的
+;;;      rust 语法时它【静默退回 fundamental-mode】，eglot 不认识这个模式，同样
+;;;      既不能跳也不补全。第 2 节的 my/rust-auto-mode 负责兜底。
+;;;   ③ 工程根不是 cargo 的根。rust-analyzer 的 rootUri 取自 project.el；若拿到的
+;;;      目录及其上层都没有 Cargo.toml，它会报
+;;;        failed to find any projects / Failed to discover workspace
+;;;      之后跳转和补全都是空的。C-c r d 会把「工程根 / crate / workspace 根」
+;;;      三者列出来，一眼看出是不是这种。
+;;;   ④ 服务器端配置写错地方。eglot 是在【临时 buffer】里读
+;;;      `eglot-workspace-configuration' 的（default-directory 设成工程根再套
+;;;      .dir-locals.el），所以在这个 .rs buffer 里 setq-local 完全无效 ——
+;;;      必须设全局值（第 3 节用 setq-default + 函数值）。
+;;; 装 rust-analyzer（~/.cargo/bin 里那个只是代理，组件缺失时会报 Unknown binary）：
+;;;   rustup component add rust-analyzer          ; 想 M-. 跳进标准库源码再加 rust-src
+;;; 大工程首次打开要等 rust-analyzer 加载完（本机 openidea 实测 ~78 秒），
+;;; 这段时间跳转和补全都是空的，不是配置坏了。
+;;; 自检：C-c r d（M-x my/rust-doctor）      看 LSP 日志：C-c r e
+;;; ---------------------------------------------------------------------------
+
+;;; 1. PATH：~/.cargo/bin 里是 rustup 的代理程序 -------------------------------
+;; GUI Emacs 不继承登录 shell 的 PATH，rust-analyzer 会"找不到"（其实装好了）。
+;; my/add-bin-to-path 幂等，已在第 2 节注册过 ~/.cargo/bin，这里再兜一次。
+(my/add-bin-to-path (expand-file-name "~/.cargo/bin"))
+
+;;; 2. 主模式：rust-ts-mode → rust-mode → my-rust-mode ------------------------
 (defun my/rust-ts-available-p ()
   "本机能否使用 tree-sitter 的 rust 语法（决定 rust-ts-mode 还是 rust-mode）。"
   (and (require 'treesit nil t)
        (treesit-available-p)
        (treesit-language-available-p 'rust)))
 
-;; ① 兜底主模式：纯 elisp，不需要 tree-sitter。有语法时用不上它。
+;; 纯 elisp 的经典 rust-mode，不依赖 tree-sitter。有语法时用不到它。
 (use-package rust-mode
   :ensure t
   :defer t
   :if (not (my/rust-ts-available-p)))
 
+;; 最后兜底：连 rust-mode 都装不上，也不能让 .rs 停在 fundamental-mode
+;; （fundamental-mode 下 eglot 找不到服务器，等于没有补全没有跳转）。
+(define-derived-mode my-rust-mode prog-mode "Rust"
+  "兜底的 Rust 主模式：只保证 eglot / xref / company 有落脚点。
+没有高亮和缩进规则。正常情况用不到它：有 tree-sitter 语法用 `rust-ts-mode'，
+否则用 MELPA 的 `rust-mode'。")
+
 (defun my/rust-auto-mode ()
-  "为 .rs 选一个「能用且 eglot 认识」的主模式，绝不停在 fundamental-mode。"
-  (cond
-   ((my/rust-ts-available-p) (rust-ts-mode))
-   ((fboundp 'rust-mode) (rust-mode))
-   (t (fundamental-mode)
-      (message "Rust: 既没有 tree-sitter 的 rust 语法，也没装 rust-mode，\
-补全/跳转不可用。装语法：M-x treesit-install-language-grammar RET rust RET"))))
+  "为 .rs 选一个 eglot 认识的主模式。"
+  (cond ((my/rust-ts-available-p) (rust-ts-mode))
+        ((fboundp 'rust-mode) (rust-mode))
+        (t (my-rust-mode))))
 
 ;; 盖掉 Emacs 31 自带的 ("\\.rs\\'" . rust-ts-mode-maybe)：它没有语法时直接退回
 ;; fundamental-mode，eglot 找不到服务器，功能全无。add-to-list 会抢在最前面。
 (add-to-list 'auto-mode-alist '("\\.rs\\'" . my/rust-auto-mode))
 
+(defun rust-dev-workspace-root ()
+  "Directory of the Cargo workspace around the current buffer, or nil."
+  (when-let* ((project (project-current nil default-directory)))
+    (file-name-as-directory (expand-file-name (project-root project)))))
+
+;;; 3. 接线：eglot / xref / rust-analyzer 配置 ---------------------------------
 (defun my/rust-setup-buffer ()
   "让 .rs buffer 用好 eglot：eldoc 组合信息 + 缩进。
-★ 内联类型提示不用在这儿开：eglot 在连上服务器的同时（`eglot--maybe-activate-
-editing-mode'）自己会开 `eglot-inlay-hints-mode'。提前在这里开会在没连接的
-buffer 上抛 \"No current JSON-RPC connection\"，并且把后面的 eglot-ensure 一起
-带崩 —— 症状就是打开 .rs 既没连上也没补全（本机实测踩过）。"
-  ;; 光标停一下就能看到 类型 / 函数签名（eglot 的 hover）。
+★ 内联提示不用在这里开：eglot 连上服务器时会自己开 `eglot-inlay-hints-mode'
+  （`eglot--maybe-activate-editing-mode'）。提前开会在还没连接的 buffer 上抛
+  \"No current JSON-RPC connection\"，并且把后面的 eglot-ensure 一起带崩 ——
+  症状正是「打开 .rs 既没连上也没补全」。"
   (setq-local eldoc-documentation-strategy #'eldoc-documentation-compose)
   (setq-local indent-tabs-mode nil))
 
-;; 服务器端配置。★ 坑：eglot 是在【临时 buffer】里读 eglot-workspace-configuration
-;; 的（default-directory 设成工程根，再套 .dir-locals.el），所以在这个 .rs buffer
-;; 里 setq-local 完全无效 —— 只能设全局值，或者写进工程的 .dir-locals.el。
-;; keyword 会被 eglot 转成 camelCase 键名发给服务器；函数值收到 server 对象。
 (defun my/rust-workspace-configuration (server)
-  "rust-analyzer 的服务器端配置；其它语言服务器返回 nil（等于什么都没配）。"
-  (when (seq-some (lambda (m) (memq m '(rust-mode rust-ts-mode)))
+  "rust-analyzer 的服务器端配置；其它语言服务器返回 nil（等于没配）。
+★ 必须用全局值（下面的 setq-default）：eglot 在【临时 buffer】里读这个变量，
+  在 .rs buffer 里 setq-local 是无效的。keyword 会被 eglot 转成 camelCase。"
+  (when (seq-some (lambda (m) (memq m '(rust-mode rust-ts-mode my-rust-mode)))
                   (ignore-errors (eglot--major-modes server)))
     '(:rust-analyzer
-      (:check (:command "clippy")        ; 保存后跑 clippy（组件已装）
-       :cargo (:allFeatures t)           ; 别按 features 裁剪，否则 cfg 掉代码
-       :procMacro (:enable t)            ; 让 derive/serde 这类宏能展开
-       :imports (:granularity "module")  ; 自动 import 写成 use x::y，不必全路径
+      (:check (:command "check")           ; 保存后 cargo check（比 clippy 轻得多）
+       :cargo (:buildScripts (:enable t))  ; tauri 这类 build.rs 生成的代码要靠它跳
+       :procMacro (:enable t)              ; derive/serde 宏能展开
+       :completion (:autoimport (:enable t))
        :inlayHints (:typeHints (:enable t))))))
 
 (setq-default eglot-workspace-configuration #'my/rust-workspace-configuration)
 
-;; 三条 hook 的先后无所谓：`eglot-ensure' 只登记一个 post-command-hook，真正的
-;; 连接发生在当前命令结束之后（所以上面 buffer 里的设置一定先就位）。
-(dolist (hook '(rust-mode-hook rust-ts-mode-hook))
+;; 服务器映射：eglot 已内置 (rust-ts-mode rust-mode) -> rust-analyzer，
+;; 这里只补最后兜底的那个模式。
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs '(my-rust-mode . ("rust-analyzer")))
+  ;; 大工程的 LSP 日志很长，排障时别被截断。
+  (setq eglot-events-buffer-size 2000000))
+
+;; ★ 关键三条。没有它们就什么都不工作：eglot 不连 ⇒ 没 backend（M-. 不动）、
+;; 没 capf（不补全）。改动本节时千万别删。
+(dolist (hook '(rust-mode-hook rust-ts-mode-hook my-rust-mode-hook))
   (add-hook hook #'my/rust-setup-buffer)
-  (add-hook hook #'my/bind-xref-keys)   ; M-. 定义 / M-? 引用 / M-, 返回
+  (add-hook hook #'my/bind-xref-keys)     ; M-. 定义 / M-? 引用 / M-, 返回
   (add-hook hook #'eglot-ensure))
 
+;;; 4. 工程根 / crate / 加载提示 -----------------------------------------------
+(defun my/rust--declares-workspace-p (manifest)
+  "MANIFEST（一个 Cargo.toml 路径）里是否声明了 [workspace]。"
+  (and (file-readable-p manifest)
+       (with-temp-buffer
+         (insert-file-contents manifest)
+         (goto-char (point-min))
+         (re-search-forward "^[ \t]*\\[workspace\\]" nil t))))
+
+(defun my/rust--cargo-root (dir)
+  "从 DIR 往上找 Cargo.toml：上层若有声明 [workspace] 的，就用最上层那个
+（cargo workspace 的根），否则用最近的那个 crate 目录。找不到返回 nil。"
+  (when-let* ((nearest (locate-dominating-file dir "Cargo.toml")))
+    (let* ((start (expand-file-name nearest))
+           (root (file-name-as-directory start))
+           (up (file-name-parent-directory (directory-file-name start)))
+           (hops 0))
+      (while (and up (< hops 40))
+        (setq hops (1+ hops))
+        (when (my/rust--declares-workspace-p (expand-file-name "Cargo.toml" up))
+          (setq root (file-name-as-directory up)))
+        (let ((next (file-name-parent-directory (directory-file-name up))))
+          (setq up (and next (not (equal next up)) next))))
+      root)))
+
 (defun my/rust-project-root ()
-  "当前 Rust 工程根目录：优先 project.el，其次往上找 Cargo.toml。
-（eglot 的 rootUri 也取自 project.el；不加 project-vc-extra-root-markers 时
-就是 git 根，cargo workspace 正好；非 git 的单 crate 由 Cargo.toml 兜底。）"
+  "eglot 实际会用的工程根（project.el）；拿不到时退回 cargo workspace 根。"
   (or (ignore-errors (project-root (project-current)))
-      (locate-dominating-file default-directory "Cargo.toml")))
+      (my/rust--cargo-root (or buffer-file-name default-directory))))
 
-(defun my/rust-cargo-check ()
-  "在工程根跑 cargo check（看编译错误比 clippy 快）。"
-  (interactive)
-  (let ((default-directory
-         (file-name-as-directory (or (my/rust-project-root) default-directory))))
-    (compile "cargo check --message-format=short")))
+(defvar my/rust--announced (make-hash-table :test #'equal)
+  "已经提示过「rust-analyzer 正在加载」的工程根。")
 
-(defun my/rust-restart-server ()
-  "重启当前工程的 rust-analyzer（改过 Cargo.toml / 加完依赖用它）。"
-  (interactive)
-  (if-let* ((server (eglot-current-server)))
-      (progn (eglot-shutdown server) (eglot-ensure))
-    (eglot-ensure)))
+(defun my/rust--on-managed ()
+  "rust buffer 连上服务器后提示一次：大工程首次加载要等 1-2 分钟。"
+  (when (derived-mode-p 'rust-mode 'rust-ts-mode 'my-rust-mode)
+    (let ((root (or (ignore-errors (my/rust-project-root))
+                    (expand-file-name default-directory))))
+      (unless (gethash root my/rust--announced)
+        (puthash root t my/rust--announced)
+        (message "rust-analyzer 已启动，正在加载工程（大 workspace 要 1-2 分钟）；\
+加载完之前 M-. 和补全可能没结果，状态看 C-c r d")))))
 
+(add-hook 'eglot-managed-mode-hook #'my/rust--on-managed)
+
+;;; 5. 自检 / 命令 -------------------------------------------------------------
 (defun my/rust--tool-version (program)
-  "返回 PROGRAM --version 的首行；没装、或 rustup 代理缺组件时返回提示。
+  "PROGRAM --version 的首行；没装或 rustup 代理缺组件时返回说明。
 （`call-process' 的 DESTINATION 为 t 时 stdout 与 stderr 一起收进 buffer，
  rustup 代理的报错正是写在 stderr 上的。）"
   (let ((exe (executable-find program)))
     (cond
-     ((null exe)
-      (format "❌ 找不到（~/.cargo/bin 没进 exec-path？）"))
+     ((null exe) "❌ 找不到（~/.cargo/bin 没进 exec-path？）")
      (t
       (let ((out (string-trim
                   (or (ignore-errors
@@ -538,14 +584,26 @@ buffer 上抛 \"No current JSON-RPC connection\"，并且把后面的 eglot-ensu
                   program))
          (t (car (split-string out "\n")))))))))
 
+(defun my/rust--analyzer-status (server)
+  "取 rust-analyzer 的 analyzerStatus 文本（crate 加载情况）；拿不到返回 nil。"
+  (let ((res (ignore-errors
+               (eglot--request server :rust-analyzer/analyzerStatus nil :timeout 10))))
+    (and (stringp res) res)))
+
 (defun my/rust-doctor ()
-  "Rust + eglot 环境自检：工具链、语言服务器、主模式、工程根。"
+  "Rust 环境自检：工具链、服务器、工程根、crate、rust-analyzer 状态。"
   (interactive)
-  (let* ((root (my/rust-project-root))
+  (let* ((file (or buffer-file-name default-directory))
+         (proj (ignore-errors (project-root (project-current))))
+         (crate (when-let* ((dir (locate-dominating-file file "Cargo.toml")))
+                  (file-name-as-directory (expand-file-name dir))))
+         (cargo (my/rust--cargo-root file))
+         (server (eglot-current-server))
          (lines
           (list
            (format "Emacs: %s / eglot: %s" emacs-version
-                   (or (ignore-errors (file-name-directory (locate-library "eglot")))
+                   (or (ignore-errors
+                         (file-name-directory (locate-library "eglot")))
                        "内置"))
            (format "rustc: %s" (my/rust--tool-version "rustc"))
            (format "cargo: %s" (my/rust--tool-version "cargo"))
@@ -554,26 +612,86 @@ buffer 上抛 \"No current JSON-RPC connection\"，并且把后面的 eglot-ensu
            (format "tree-sitter rust 语法: %s"
                    (if (my/rust-ts-available-p)
                        "✅ 有（用 rust-ts-mode）"
-                     "❌ 没有（已退回 rust-mode；要语法树就 M-x treesit-install-language-grammar RET rust RET）"))
-           (format "工程根: %s" (if root
-                                   (abbreviate-file-name root)
-                                 "❌ 没找到（eglot 会用文件所在目录）"))
-           (format "Cargo.toml: %s"
-                   (or (locate-dominating-file default-directory "Cargo.toml")
-                       "❌ 上方没找到"))
-           (format "当前 buffer: %s / %s / eglot=%s"
-                   (buffer-name) major-mode
-                   (if (eglot-current-server) "已连接" "未连接")))))
+                     "❌ 没有（退回 rust-mode；要语法树就 M-x treesit-install-language-grammar RET rust RET）"))
+           (format "当前 buffer: %s / %s" (buffer-name) major-mode)
+           (format "eglot 连接: %s"
+                   (if server
+                       (format "✅ %s（工程 %s）"
+                               (ignore-errors (eglot--server-name server))
+                               (or (ignore-errors
+                                     (abbreviate-file-name
+                                      (project-root (eglot--project server))))
+                                   "?"))
+                     "❌ 未连接 —— 没有连接就没有补全和跳转（C-c r r 重连）"))
+           (format "project.el 工程根: %s"
+                   (if proj (abbreviate-file-name proj)
+                     "（无，eglot 会用文件所在目录）"))
+           (format "最近 crate: %s"
+                   (if crate (abbreviate-file-name crate)
+                     "❌ 上方没有 Cargo.toml"))
+           (format "cargo workspace 根: %s"
+                   (if cargo (abbreviate-file-name cargo)
+                     "❌ 上方没有 Cargo.toml")))))
+    ;; 关键诊断：工程根里没有 Cargo.toml ⇒ rust-analyzer 在 workspace 外面开工
+    (setq lines
+          (append lines
+                  (list
+                   (cond
+                    ((null crate)
+                     "⚠ 上方没有 Cargo.toml：rust-analyzer 只能在单文件模式下工作 —— 同文件内的符号还能跳，标准库/外部 crate 的补全和跳转都没有。先 cargo new / cargo init。")
+                    ((and proj
+                          (not (file-exists-p (expand-file-name "Cargo.toml" proj))))
+                     (format "⚠ 工程根（%s）里没有 Cargo.toml，crate 在 %s —— rust-analyzer 会报 failed to find any projects，跳转和补全全空。要么把 \"Cargo.toml\" 加进 project-vc-extra-root-markers，要么直接打开 crate 目录。"
+                             (abbreviate-file-name proj)
+                             (abbreviate-file-name crate)))
+                    ((null server)
+                     "⚠ 还没连上服务器：C-c r r 重连，等工程加载完再按 M-.。")
+                    (t "✅ 工程根、crate、服务器都对得上。")))))
+    (when server
+      (let ((status (my/rust--analyzer-status server)))
+        (setq lines
+              (append lines
+                      (list (format "rust-analyzer 状态:\n%s"
+                                    (if (and (stringp status)
+                                             (not (string-empty-p status)))
+                                        (string-trim status)
+                                      "（拿不到 analyzerStatus，必要时看 C-c r e 的日志）")))))))
     (with-output-to-temp-buffer "*rust-doctor*"
-      (princ "Rust + eglot 环境自检\n────────────────────\n")
+      (princ "Rust 环境自检\n────────────────────\n")
       (dolist (line lines) (princ (concat line "\n"))))
     (with-current-buffer "*rust-doctor*" (special-mode))))
+
+;; 兼容旧名字（上一版那段配置里叫 rust-dev-doctor）
+(defalias 'rust-dev-doctor #'my/rust-doctor
+  "已改名：见 `my/rust-doctor'。")
+
+(defun my/rust-restart-server ()
+  "重启当前工程的 rust-analyzer（改过 Cargo.toml / 加完依赖用它）。"
+  (interactive)
+  (if-let* ((server (eglot-current-server)))
+      (progn (eglot-shutdown server) (eglot-ensure))
+    (eglot-ensure)))
+
+(defun my/rust-cargo-check ()
+  "在工程根跑 cargo check（看编译错误比 clippy 快）。"
+  (interactive)
+  (let ((default-directory
+         (file-name-as-directory (or (my/rust-project-root) default-directory))))
+    (compile "cargo check --message-format=short")))
+
+(defun my/rust-events ()
+  "打开当前 eglot 连接的 LSP 收发日志（排障用）。"
+  (interactive)
+  (if-let* ((server (eglot-current-server)))
+      (pop-to-buffer (jsonrpc-events-buffer server))
+    (user-error "当前 buffer 没有 eglot 连接")))
 
 (defvar-keymap my/rust-command-map
   :doc "Rust 辅助命令"
   "d" #'my/rust-doctor
   "r" #'my/rust-restart-server
-  "c" #'my/rust-cargo-check)
+  "c" #'my/rust-cargo-check
+  "e" #'my/rust-events)
 
 ;; rust-ts-mode / rust-mode 都自带 keymap，但只有真加载了才有 —— 所以用
 ;; with-eval-after-load，别在 init 里直接 keymap-set（会抢先 defvar 掉空表）。
@@ -581,6 +699,8 @@ buffer 上抛 \"No current JSON-RPC connection\"，并且把后面的 eglot-ensu
   (keymap-set rust-ts-mode-map "C-c r" my/rust-command-map))
 (with-eval-after-load 'rust-mode
   (keymap-set rust-mode-map "C-c r" my/rust-command-map))
+(keymap-set my-rust-mode-map "C-c r" my/rust-command-map)
+
 
 ;;; --------------------------------------------------------------------------
 ;;; 9. Lean 4
